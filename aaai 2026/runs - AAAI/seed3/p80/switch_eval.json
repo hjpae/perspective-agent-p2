@@ -1,0 +1,124 @@
+{
+  "delay_g": {
+    "n": 3,
+    "mean": 54.0,
+    "median": 22.0
+  },
+  "delay_pi": {
+    "n": 2,
+    "mean": 7.5,
+    "median": 7.5
+  },
+  "lag_g": {
+    "up": {
+      "n": 2,
+      "mean": 10.0,
+      "median": 10.0
+    },
+    "dn": {
+      "n": 2,
+      "mean": 11.5,
+      "median": 11.5
+    },
+    "L": 60
+  },
+  "lag_pi": {
+    "up": {
+      "n": 2,
+      "mean": 2.5,
+      "median": 2.5
+    },
+    "dn": {
+      "n": 2,
+      "mean": 0.5,
+      "median": 0.5
+    },
+    "L": 60
+  },
+  "hysteresis_g": {
+    "n_up": 2,
+    "n_dn": 2,
+    "area": 0.2451605200767517
+  },
+  "hysteresis_pi": {
+    "n_up": 2,
+    "n_dn": 2,
+    "area": 1.0943266153335571
+  },
+  "dist_stats_g": {
+    "up": {
+      "n_events": 2,
+      "NSI_W1": null,
+      "QD": null,
+      "Amp_IQR": null,
+      "w1_increments": null,
+      "q_curve": null,
+      "iqr_curve": null,
+      "tau_early": null
+    },
+    "dn": {
+      "n_events": 2,
+      "NSI_W1": null,
+      "QD": null,
+      "Amp_IQR": null,
+      "w1_increments": null,
+      "q_curve": null,
+      "iqr_curve": null,
+      "tau_early": null
+    },
+    "combined": {
+      "NSI_W1": null,
+      "QD": null,
+      "Amp_IQR": null,
+      "n_events": 4
+    },
+    "L": 60
+  },
+  "dist_stats_pi": {
+    "up": {
+      "n_events": 2,
+      "NSI_W1": null,
+      "QD": null,
+      "Amp_IQR": null,
+      "w1_increments": null,
+      "q_curve": null,
+      "iqr_curve": null,
+      "tau_early": null
+    },
+    "dn": {
+      "n_events": 2,
+      "NSI_W1": null,
+      "QD": null,
+      "Amp_IQR": null,
+      "w1_increments": null,
+      "q_curve": null,
+      "iqr_curve": null,
+      "tau_early": null
+    },
+    "combined": {
+      "NSI_W1": null,
+      "QD": null,
+      "Amp_IQR": null,
+      "n_events": 4
+    },
+    "L": 60
+  },
+  "DSI": null,
+  "policy_signal": "entropy",
+  "params": {
+    "run_dir": "/home/hjpae/cear_demo/outputs/runs/20260129_114505",
+    "warmup": 150,
+    "pre_window": 80,
+    "alpha": 0.05,
+    "consec": 3,
+    "L": 60,
+    "policy_signal": "entropy",
+    "early_frac": 0.25,
+    "qd_p": 0.5
+  },
+  "meta": {
+    "period": 80,
+    "warmup": 150,
+    "T": 550
+  }
+}

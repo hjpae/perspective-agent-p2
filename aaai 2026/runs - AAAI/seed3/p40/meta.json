@@ -1,0 +1,147 @@
+{
+  "mode": "switch_sweep",
+  "ckpt": "/home/hjpae/cear_demo/outputs/runs/seed3/ckpt.pt",
+  "seed": 0,
+  "device": "cpu",
+  "greedy": true,
+  "T": 550,
+  "warmup": 150,
+  "period": 40,
+  "sigma_A": [
+    0.6,
+    0.3,
+    0.05
+  ],
+  "sigma_B": [
+    0.05,
+    0.3,
+    0.6
+  ],
+  "train_meta": {
+    "seed": 3,
+    "steps": 48000,
+    "lr": 0.0003,
+    "device": "cpu",
+    "loss_weights": {
+      "w_smooth": 0.25,
+      "w_entropy": 0.001,
+      "w_actor": 0.25
+    },
+    "actor_b": 0.98,
+    "stopgrad_default": {
+      "policy_state_detach": true,
+      "pred_pi_detach": true,
+      "actor_cost_detach": true
+    },
+    "warmup_steps": 12000,
+    "env_cfg": {
+      "width": 15,
+      "height": 9,
+      "obs_dim": 8,
+      "max_steps": 240,
+      "zone_mu_scale": 0.5,
+      "zone_sigma": [
+        0.6,
+        0.3,
+        0.05
+      ],
+      "include_xy": false,
+      "use_slip": false,
+      "use_drift": false,
+      "use_volatility": false,
+      "use_hazard": false,
+      "p_slip": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "slip_mode": "random_action",
+      "p_drift": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "drift_vec": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "volatile_zone": 0,
+      "volatile_period": 40,
+      "volatile_strength": 0.0,
+      "hazard_mode": "teleport",
+      "p_hazard": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "hazard_teleport_to": [
+        0,
+        0
+      ],
+      "hazard_blackout_steps": 6,
+      "phase2_obs_mu_scale": 0.5,
+      "phase2_obs_equal_sigma": true,
+      "mirror_x": false,
+      "mirror_actions": true
+    },
+    "agent_cfg": {
+      "encoder": {
+        "obs_dim": 8,
+        "proprio_dim": 5,
+        "z_dim": 16,
+        "p_dim": 8,
+        "hidden": 64,
+        "dropout": 0.0
+      },
+      "world": {
+        "z_dim": 16,
+        "p_dim": 8,
+        "g_dim": 12,
+        "g_damping": 0.1,
+        "layernorm": true
+      },
+      "state": {
+        "z_dim": 16,
+        "p_dim": 8,
+        "g_dim": 12,
+        "s_dim": 16,
+        "hidden": 64,
+        "dropout": 0.0,
+        "g_influence": 1.0
+      },
+      "policy": {
+        "s_dim": 16,
+        "hidden": 64,
+        "n_actions": 5,
+        "dropout": 0.0
+      }
+    },
+    "decoder_cfg": {
+      "g_dim": 12,
+      "n_actions": 5,
+      "obs_dim": 8,
+      "hidden": 64,
+      "dropout": 0.0
+    },
+    "viewer": {
+      "enabled": false,
+      "view_every": 2,
+      "view_fps": 20,
+      "view_cell_px": 42
+    },
+    "traj_logging": {
+      "enabled": true,
+      "log_every": 1
+    }
+  }
+}
