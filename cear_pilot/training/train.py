@@ -85,132 +85,36 @@ def save_checkpoint(run_dir: Path, tag: str, agent: CEARAgent, decoder: ObsDecod
     torch.save(ckpt, run_dir / f"ckpt_{tag}.pt")
 
 
-def apply_ecology_switch_B(env: NZoneGridEnv, args) -> None:
-    # -------------------------
-    # boolean toggles
-    # -------------------------
-    if args.use_encounter_B is not None:
-        env.cfg.use_encounter = bool(args.use_encounter_B)
-    if args.use_slip_B is not None:
-        env.cfg.use_slip = bool(args.use_slip_B)
-    if args.use_drift_B is not None:
-        env.cfg.use_drift = bool(args.use_drift_B)
-    if args.use_volatility_B is not None:
-        env.cfg.use_volatility = bool(args.use_volatility_B)
-    if args.use_hazard_B is not None:
-        env.cfg.use_hazard = bool(args.use_hazard_B)
-
-    # -------------------------
-    # observation regime
-    # -------------------------
-    if args.zone_sigma_B is not None:
-        env.cfg.zone_sigma = tuple(float(x) for x in args.zone_sigma_B)
-        env.set_zone_sigma(env.cfg.zone_sigma)
-
-    # -------------------------
-    # slip / drift runtime params
-    # -------------------------
-    if args.p_slip_B is not None:
-        env.cfg.p_slip = tuple(float(x) for x in args.p_slip_B)
-        env._p_slip_rt = np.array(env.cfg.p_slip, dtype=np.float32)
-
-    if args.p_drift_B is not None:
-        env.cfg.p_drift = tuple(float(x) for x in args.p_drift_B)
-        env._p_drift_rt = np.array(env.cfg.p_drift, dtype=np.float32)
-
-    if args.drift_vec_B is not None:
-        dv = args.drift_vec_B
-        env.cfg.drift_vec = ((dv[0], dv[1]), (dv[2], dv[3]), (dv[4], dv[5]))
-        env._drift_vec_rt = [tuple(v) for v in env.cfg.drift_vec]
-
-    # -------------------------
-    # volatility
-    # -------------------------
-    if args.volatile_zone_B is not None:
-        env.cfg.volatile_zone = int(args.volatile_zone_B)
-    if args.volatile_period_B is not None:
-        env.cfg.volatile_period = int(args.volatile_period_B)
-    if args.volatile_strength_B is not None:
-        env.cfg.volatile_strength = float(args.volatile_strength_B)
-
-    # -------------------------
-    # hazard
-    # -------------------------
-    if args.p_hazard_B is not None:
-        env.cfg.p_hazard = tuple(float(x) for x in args.p_hazard_B)
-    if args.hazard_mode_B is not None:
-        env.cfg.hazard_mode = str(args.hazard_mode_B)
-    if args.hazard_teleport_to_B is not None:
-        env.cfg.hazard_teleport_to = tuple(int(x) for x in args.hazard_teleport_to_B)
-    if args.hazard_blackout_steps_B is not None:
-        env.cfg.hazard_blackout_steps = int(args.hazard_blackout_steps_B)
-
-    # -------------------------
-    # encounter / rupture ecology
-    # -------------------------
-    if args.encounter_signal_B is not None:
-        env.cfg.encounter_signal = float(args.encounter_signal_B)
-    if args.encounter_delay_min_B is not None:
-        env.cfg.encounter_delay_min = int(args.encounter_delay_min_B)
-    if args.encounter_delay_max_B is not None:
-        env.cfg.encounter_delay_max = int(args.encounter_delay_max_B)
-
-    if args.fragility_decay_B is not None:
-        env.cfg.fragility_decay = float(args.fragility_decay_B)
-    if args.rupture_memory_decay_B is not None:
-        env.cfg.rupture_memory_decay = float(args.rupture_memory_decay_B)
-    if args.zone_fragility_delta_B is not None:
-        env.cfg.zone_fragility_delta = tuple(float(x) for x in args.zone_fragility_delta_B)
-
-    if args.rupture_base_prob_B is not None:
-        env.cfg.rupture_base_prob = float(args.rupture_base_prob_B)
-    if args.rupture_fragility_weight_B is not None:
-        env.cfg.rupture_fragility_weight = float(args.rupture_fragility_weight_B)
-    if args.rupture_memory_weight_B is not None:
-        env.cfg.rupture_memory_weight = float(args.rupture_memory_weight_B)
-    if args.rupture_obs_corrupt_steps_B is not None:
-        env.cfg.rupture_obs_corrupt_steps = int(args.rupture_obs_corrupt_steps_B)
-    if args.rupture_obs_sigma_B is not None:
-        env.cfg.rupture_obs_sigma = float(args.rupture_obs_sigma_B)
-    if args.rupture_action_slip_prob_B is not None:
-        env.cfg.rupture_action_slip_prob = float(args.rupture_action_slip_prob_B)
-    if args.rupture_memory_increment_B is not None:
-        env.cfg.rupture_memory_increment = float(args.rupture_memory_increment_B)
-    if args.no_rupture_memory_delta_B is not None:
-        env.cfg.no_rupture_memory_delta = float(args.no_rupture_memory_delta_B)
-
-    print(
-        "[eco-switch] applied B ecology:",
-        {
-            "use_encounter": env.cfg.use_encounter,
-            "use_slip": env.cfg.use_slip,
-            "use_drift": env.cfg.use_drift,
-            "use_volatility": env.cfg.use_volatility,
-            "use_hazard": env.cfg.use_hazard,
-            "zone_sigma": getattr(env, "_zone_sigma", None).tolist() if hasattr(env, "_zone_sigma") else None,
-            "p_slip": env._p_slip_rt.tolist(),
-            "p_drift": env._p_drift_rt.tolist(),
-            "drift_vec": env._drift_vec_rt,
-            "rupture_base_prob": env.cfg.rupture_base_prob,
-            "rupture_fragility_weight": env.cfg.rupture_fragility_weight,
-            "rupture_memory_weight": env.cfg.rupture_memory_weight,
-        },
-    )
-
-
 def main():
     ap = argparse.ArgumentParser()
 
+    # -------------------------
+    # core training
+    # -------------------------
     ap.add_argument("--steps", type=int, default=48000)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="cpu")
 
-    ap.add_argument("--w_smooth", type=float, default=0.25)
-    ap.add_argument("--w_entropy", type=float, default=0.01)
+    ap.add_argument("--w_smooth", type=float, default=0.05)
+    ap.add_argument("--w_entropy", type=float, default=0.003)
     ap.add_argument("--w_actor", type=float, default=0.5)
     ap.add_argument("--actor_b", type=float, default=0.98)
 
+    # explicit, short warmup for Phase 2
+    ap.add_argument("--warmup_steps", type=int, default=2000)
+
+    # default: keep g across episode boundaries
+    ap.add_argument(
+        "--reset_g_every_episode",
+        action="store_true",
+        help="If set, reset g to zero at every episode boundary (old Phase-1 behavior). "
+             "Default is False, i.e. carry g across episodes.",
+    )
+
+    # -------------------------
+    # env base
+    # -------------------------
     ap.add_argument("--width", type=int, default=15)
     ap.add_argument("--height", type=int, default=9)
     ap.add_argument("--obs_dim", type=int, default=8)
@@ -219,20 +123,29 @@ def main():
     ap.add_argument("--mirror_x", action="store_true")
     ap.add_argument("--mirror_actions", action="store_true")
 
+    # -------------------------
+    # logging / saving
+    # -------------------------
     ap.add_argument("--log_traj", action="store_true")
     ap.add_argument("--log_every", type=int, default=1)
     ap.add_argument("--save_ckpt_every", type=int, default=12000)
 
+    # -------------------------
+    # optional live viewer
+    # -------------------------
     ap.add_argument("--view", action="store_true")
     ap.add_argument("--view_every", type=int, default=2)
     ap.add_argument("--view_fps", type=int, default=20)
     ap.add_argument("--view_cell_px", type=int, default=42)
 
-    # Existing ecology toggles
+    # -------------------------
+    # ecology toggles (continuous from the start)
+    # -------------------------
     ap.add_argument("--use_slip", action="store_true")
     ap.add_argument("--use_drift", action="store_true")
     ap.add_argument("--use_volatility", action="store_true")
     ap.add_argument("--use_hazard", action="store_true")
+    ap.add_argument("--use_encounter", action="store_true")
 
     ap.add_argument("--p_slip", type=float, nargs=3, default=(0.0, 0.0, 0.0))
     ap.add_argument("--p_drift", type=float, nargs=3, default=(0.0, 0.0, 0.0))
@@ -247,72 +160,27 @@ def main():
     ap.add_argument("--hazard_teleport_to", type=int, nargs=2, default=(0, 0))
     ap.add_argument("--hazard_blackout_steps", type=int, default=6)
 
-    # New encounter config
-    ap.add_argument("--use_encounter", action="store_true")
+    # encounter / hidden context
     ap.add_argument("--encounter_signal", type=float, default=1.25)
     ap.add_argument("--encounter_delay_min", type=int, default=2)
     ap.add_argument("--encounter_delay_max", type=int, default=5)
 
     ap.add_argument("--fragility_init", type=float, default=0.10)
-    ap.add_argument("--fragility_decay", type=float, default=0.01)
+    ap.add_argument("--fragility_decay", type=float, default=0.00)
     ap.add_argument("--rupture_memory_init", type=float, default=0.00)
     ap.add_argument("--rupture_memory_decay", type=float, default=0.95)
 
-    ap.add_argument("--zone_fragility_delta", type=float, nargs=3, default=(-0.02, 0.00, 0.02))
+    ap.add_argument("--zone_fragility_delta", type=float, nargs=3, default=(0.00, 0.03, 0.08))
 
-    ap.add_argument("--rupture_base_prob", type=float, default=0.15)
-    ap.add_argument("--rupture_fragility_weight", type=float, default=0.60)
-    ap.add_argument("--rupture_memory_weight", type=float, default=0.20)
+    ap.add_argument("--rupture_base_prob", type=float, default=0.55)
+    ap.add_argument("--rupture_fragility_weight", type=float, default=1.20)
+    ap.add_argument("--rupture_memory_weight", type=float, default=0.50)
 
-    ap.add_argument("--rupture_obs_corrupt_steps", type=int, default=3)
-    ap.add_argument("--rupture_obs_sigma", type=float, default=3.0)
-    ap.add_argument("--rupture_action_slip_prob", type=float, default=0.30)
-    ap.add_argument("--rupture_memory_increment", type=float, default=0.30)
+    ap.add_argument("--rupture_obs_corrupt_steps", type=int, default=8)
+    ap.add_argument("--rupture_obs_sigma", type=float, default=5.0)
+    ap.add_argument("--rupture_action_slip_prob", type=float, default=0.65)
+    ap.add_argument("--rupture_memory_increment", type=float, default=0.50)
     ap.add_argument("--no_rupture_memory_delta", type=float, default=-0.10)
-
-    # ---------------------------
-    # Ecology switch (NEW)
-    # ---------------------------
-    ap.add_argument("--eco_switch_step", type=int, default=-1,
-                    help="If >=0, switch environment ecology at this global step.")
-
-    ap.add_argument("--zone_sigma_B", type=float, nargs=3, default=None)
-
-    ap.add_argument("--use_encounter_B", type=int, choices=[0, 1], default=None)
-    ap.add_argument("--use_slip_B", type=int, choices=[0, 1], default=None)
-    ap.add_argument("--use_drift_B", type=int, choices=[0, 1], default=None)
-    ap.add_argument("--use_volatility_B", type=int, choices=[0, 1], default=None)
-    ap.add_argument("--use_hazard_B", type=int, choices=[0, 1], default=None)
-
-    ap.add_argument("--p_slip_B", type=float, nargs=3, default=None)
-    ap.add_argument("--p_drift_B", type=float, nargs=3, default=None)
-    ap.add_argument("--drift_vec_B", type=int, nargs=6, default=None)
-
-    ap.add_argument("--volatile_zone_B", type=int, default=None)
-    ap.add_argument("--volatile_period_B", type=int, default=None)
-    ap.add_argument("--volatile_strength_B", type=float, default=None)
-
-    ap.add_argument("--p_hazard_B", type=float, nargs=3, default=None)
-    ap.add_argument("--hazard_mode_B", type=str, default=None)
-    ap.add_argument("--hazard_teleport_to_B", type=int, nargs=2, default=None)
-    ap.add_argument("--hazard_blackout_steps_B", type=int, default=None)
-
-    ap.add_argument("--encounter_signal_B", type=float, default=None)
-    ap.add_argument("--encounter_delay_min_B", type=int, default=None)
-    ap.add_argument("--encounter_delay_max_B", type=int, default=None)
-
-    ap.add_argument("--fragility_decay_B", type=float, default=None)
-    ap.add_argument("--rupture_memory_decay_B", type=float, default=None)
-    ap.add_argument("--zone_fragility_delta_B", type=float, nargs=3, default=None)
-
-    ap.add_argument("--rupture_base_prob_B", type=float, default=None)
-    ap.add_argument("--rupture_fragility_weight_B", type=float, default=None)
-    ap.add_argument("--rupture_memory_weight_B", type=float, default=None)
-    ap.add_argument("--rupture_obs_corrupt_steps_B", type=int, default=None)
-    ap.add_argument("--rupture_obs_sigma_B", type=float, default=None)
-    ap.add_argument("--rupture_action_slip_prob_B", type=float, default=None)
-    ap.add_argument("--rupture_memory_increment_B", type=float, default=None)
-    ap.add_argument("--no_rupture_memory_delta_B", type=float, default=None)
 
     args = ap.parse_args()
 
@@ -334,19 +202,21 @@ def main():
         use_drift=args.use_drift,
         use_volatility=args.use_volatility,
         use_hazard=args.use_hazard,
+        use_encounter=args.use_encounter,
 
         p_slip=tuple(args.p_slip),
         p_drift=tuple(args.p_drift),
         drift_vec=drift_vec,
+
         volatile_zone=args.volatile_zone,
         volatile_period=args.volatile_period,
         volatile_strength=args.volatile_strength,
+
         hazard_mode=args.hazard_mode,
         p_hazard=tuple(args.p_hazard),
         hazard_teleport_to=tuple(args.hazard_teleport_to),
         hazard_blackout_steps=args.hazard_blackout_steps,
 
-        use_encounter=args.use_encounter,
         encounter_signal=args.encounter_signal,
         encounter_delay_min=args.encounter_delay_min,
         encounter_delay_max=args.encounter_delay_max,
@@ -408,7 +278,7 @@ def main():
     run_dir = Path("outputs") / "runs" / timestamp_id()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    warmup_steps = max(2000, min(args.steps // 4, 20000))
+    warmup_steps = int(max(0, args.warmup_steps))
 
     meta = {
         "seed": args.seed,
@@ -422,7 +292,7 @@ def main():
         },
         "actor_b": args.actor_b,
         "warmup_steps": warmup_steps,
-        "eco_switch_step": args.eco_switch_step,
+        "reset_g_every_episode": bool(args.reset_g_every_episode),
         "env_cfg": asdict(env_cfg),
         "agent_cfg": {
             "encoder": asdict(agent_cfg.encoder),
@@ -448,6 +318,7 @@ def main():
             title="Live Training (SPACE=Pause, Close=Stop)",
         )
 
+    # initialize agent ONCE
     agent.reset(batch_size=1)
     last_action = 4
     g_prev = agent.get_latents()["g"].detach().clone()
@@ -463,19 +334,17 @@ def main():
 
     act_hist = np.zeros(n_actions, dtype=np.int64)
     zone_hist = np.zeros(3, dtype=np.int64)
+    enc_hist = 0
+    rup_hist = 0
+    slip_hist = 0
+    drift_hist = 0
 
     t0 = time.time()
     episode = 0
     t_in_ep = 0
 
-    eco_switched = False
-
     try:
         for step in range(args.steps):
-            if args.eco_switch_step >= 0 and (not eco_switched) and step == args.eco_switch_step:
-                apply_ecology_switch_B(env, args)
-                eco_switched = True
-
             x_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             p_t = make_proprio_from_last_action(last_action, n_actions, device=device)
 
@@ -484,6 +353,7 @@ def main():
             s_t = out["s"]
             logits_pred = out["logits"]
 
+            # actor uses detached s
             logits_act = agent.policy(s_t.detach())
             pi_act = torch.softmax(logits_act, dim=-1)
             pi_pred = torch.softmax(logits_pred, dim=-1).detach()
@@ -508,12 +378,13 @@ def main():
             with torch.no_grad():
                 e_val = float(e_chosen.detach().item())
                 _, s = err_stats.update(e_val)
+
                 if b is None:
                     b = e_val
                 if args.actor_b > 0.0:
                     b = float(args.actor_b * b + (1.0 - args.actor_b) * e_val)
-                baseline = float(b) if (args.actor_b > 0.0) else 0.0
 
+                baseline = float(b) if (args.actor_b > 0.0) else 0.0
                 adv = -(e_val - baseline)
                 adv = adv / (s + 1e-8)
                 adv = float(np.clip(adv, -5.0, 5.0))
@@ -521,19 +392,11 @@ def main():
             logp = F.log_softmax(logits_act, dim=-1)[0, a_int]
             loss_actor = -(torch.tensor(adv, device=device) * logp)
 
-            learn_phase = "A" if step < warmup_steps else "B"
-            eco_phase = "A" if (args.eco_switch_step < 0 or step < args.eco_switch_step) else "B"
-
+            learn_phase = "warmup" if step < warmup_steps else "full"
             w_actor_eff = 0.0 if step < warmup_steps else args.w_actor
 
-            with torch.no_grad():
-                H = float(entropy.item())
-                H_target = 1.0
-                bump = max(0.0, (H_target - H) / max(H_target, 1e-6))
-                ent_coef = args.w_entropy * (1.0 + 2.0 * bump)
-
             loss_world = loss_pred + args.w_smooth * loss_smooth
-            loss = loss_world + w_actor_eff * loss_actor - ent_coef * entropy
+            loss = loss_world + w_actor_eff * loss_actor - args.w_entropy * entropy
 
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -543,6 +406,12 @@ def main():
             g_prev = g_t.detach().clone()
             obs = obs_next
             last_action = a_int
+
+            # logging counters
+            enc_hist += int(bool(info.get("encounter_event", False)))
+            rup_hist += int(bool(info.get("rupture", False)))
+            slip_hist += int(bool(info.get("slip", False)))
+            drift_hist += int(bool(info.get("drift", False)))
 
             if args.log_traj and ((step % log_every) == 0):
                 z = info.get("zone_id", -1)
@@ -556,7 +425,6 @@ def main():
                     "episode": int(episode),
                     "t_in_ep": int(t_in_ep),
                     "learn_phase": str(learn_phase),
-                    "eco_phase": str(eco_phase),
                     "zone_id": int(z),
                     "x": int(info.get("x", -1)),
                     "y": int(info.get("y", -1)),
@@ -602,9 +470,14 @@ def main():
             t_in_ep += 1
             if truncated or terminated:
                 obs, info = env.reset(seed=args.seed + episode + 1)
-                agent.reset(batch_size=1)
-                last_action = 4
+
+                if args.reset_g_every_episode:
+                    agent.reset(batch_size=1)
+
+                # if carrying g across episodes, keep current latent
                 g_prev = agent.get_latents()["g"].detach().clone()
+
+                last_action = 4
                 episode += 1
                 t_in_ep = 0
 
@@ -642,12 +515,10 @@ def main():
 
                 act_prob = (act_hist / max(act_hist.sum(), 1)).tolist()
                 zone_prob = (zone_hist / max(zone_hist.sum(), 1)).tolist()
-                act_hist[:] = 0
-                zone_hist[:] = 0
 
                 print(
                     f"[{step+1:>7}/{args.steps}] "
-                    f"learn={learn_phase} eco={eco_phase} "
+                    f"phase={learn_phase} "
                     f"world={lw:.4f} w_ema={float(ema_world):.4f} pred={float(loss_pred.item()):.4f} "
                     f"smooth={float(loss_smooth.item()):.4f} | "
                     f"actor={float(loss_actor.item()):.4f} b={0.0 if b is None else float(b):.4f} "
@@ -655,12 +526,19 @@ def main():
                     f"logits|.|={float(logits_norm_ema):.3f} "
                     f"e[min,max,std]={e_min:.3f},{e_max:.3f},{e_std:.3f} "
                     f"zone={[round(x,2) for x in zone_prob]} act={[round(x,2) for x in act_prob]} "
+                    f"enc_win={enc_hist} rup_win={rup_hist} slip_win={slip_hist} drift_win={drift_hist} "
                     f"frag={float(info.get('fragility', np.nan)):.2f} "
                     f"rmem={float(info.get('rupture_memory', np.nan)):.2f} "
-                    f"enc={int(bool(info.get('on_encounter', False)))} "
-                    f"rup={int(bool(info.get('rupture', False)))} "
+                    f"carry_g={int(not args.reset_g_every_episode)} "
                     f"(ep={episode}, {dt:.1f}s)"
                 )
+
+                act_hist[:] = 0
+                zone_hist[:] = 0
+                enc_hist = 0
+                rup_hist = 0
+                slip_hist = 0
+                drift_hist = 0
                 t0 = time.time()
 
             if args.save_ckpt_every > 0 and ((step + 1) % args.save_ckpt_every == 0):
