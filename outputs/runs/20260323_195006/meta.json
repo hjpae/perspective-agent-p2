@@ -1,0 +1,138 @@
+{
+  "seed": 0,
+  "steps": 48000,
+  "lr": 0.0003,
+  "device": "cuda",
+  "loss_weights": {
+    "w_smooth": 0.25,
+    "w_entropy": 0.01,
+    "w_actor": 0.5
+  },
+  "actor_b": 0.98,
+  "warmup_steps": 12000,
+  "env_cfg": {
+    "width": 15,
+    "height": 9,
+    "obs_dim": 8,
+    "max_steps": 240,
+    "zone_mu_scale": 0.5,
+    "zone_sigma": [
+      0.6,
+      0.3,
+      0.05
+    ],
+    "include_xy": false,
+    "use_slip": false,
+    "use_drift": false,
+    "use_volatility": false,
+    "use_hazard": false,
+    "p_slip": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "slip_mode": "random_action",
+    "p_drift": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "drift_vec": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ]
+    ],
+    "volatile_zone": 0,
+    "volatile_period": 40,
+    "volatile_strength": 0.0,
+    "hazard_mode": "teleport",
+    "p_hazard": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "hazard_teleport_to": [
+      0,
+      0
+    ],
+    "hazard_blackout_steps": 6,
+    "phase2_obs_mu_scale": 0.5,
+    "phase2_obs_equal_sigma": true,
+    "mirror_x": false,
+    "mirror_actions": false,
+    "use_encounter": true,
+    "encounter_coords": [],
+    "encounter_dims": [
+      0,
+      1
+    ],
+    "encounter_signal": 1.25,
+    "fragility_init": 0.1,
+    "rupture_memory_init": 0.0,
+    "fragility_decay": 0.01,
+    "rupture_memory_decay": 0.95,
+    "zone_fragility_delta": [
+      -0.02,
+      0.0,
+      0.02
+    ],
+    "encounter_delay_min": 2,
+    "encounter_delay_max": 5,
+    "rupture_base_prob": 0.15,
+    "rupture_fragility_weight": 0.6,
+    "rupture_memory_weight": 0.2,
+    "rupture_obs_corrupt_steps": 3,
+    "rupture_obs_sigma": 3.0,
+    "rupture_action_slip_prob": 0.3,
+    "rupture_memory_increment": 0.3,
+    "no_rupture_memory_delta": -0.1
+  },
+  "agent_cfg": {
+    "encoder": {
+      "obs_dim": 8,
+      "proprio_dim": 5,
+      "z_dim": 16,
+      "p_dim": 8,
+      "hidden": 64,
+      "dropout": 0.0
+    },
+    "world": {
+      "z_dim": 16,
+      "p_dim": 8,
+      "g_dim": 12,
+      "g_damping": 0.1,
+      "layernorm": true
+    },
+    "state": {
+      "z_dim": 16,
+      "p_dim": 8,
+      "g_dim": 12,
+      "s_dim": 16,
+      "hidden": 64,
+      "dropout": 0.0,
+      "g_influence": 1.0
+    },
+    "policy": {
+      "s_dim": 16,
+      "hidden": 64,
+      "n_actions": 5,
+      "dropout": 0.0
+    }
+  },
+  "decoder_cfg": {
+    "g_dim": 12,
+    "n_actions": 5,
+    "obs_dim": 8,
+    "hidden": 64,
+    "dropout": 0.0
+  }
+}
