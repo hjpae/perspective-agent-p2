@@ -19,12 +19,14 @@ except Exception as e:
 class NZonePhase2Config:
     """
     Phase 2:
-    - 3 zones, 6 columns each => width=18 
-    - encounter columns every 3rd column: [.., E, .., E, .., E, ..]
-    - start at rightmost edge of Z0, center row
+    - 3 zones, 6 columns each => width=18
+    - encounter columns every 3rd column
+    - start at right edge of Z0, center row
     - weaker sigma gradient than Phase 1
-    - encounter columns expose hidden reliability structure
-    - maturity target: flexible but stable recalibration of engagement threshold
+    - structured reliability blocks:
+        open / mixed / guarded
+    - maturity target:
+        conflict-engagement threshold plasticity x stability
     """
     width: int = 18
     height: int = 9
@@ -35,11 +37,10 @@ class NZonePhase2Config:
     zone_mu_scale: float = 0.5
     include_xy: bool = False
 
-    # fixed encounter columns every 3rd column
     encounter_signal: float = 1.20
     encounter_dims: Tuple[int, int] = (0, 1)
 
-    # weaker ecology than the previous collapse-prone version
+    # milder baseline ecology
     p_slip: Tuple[float, float, float] = (0.00, 0.03, 0.08)
     p_drift: Tuple[float, float, float] = (0.00, 0.04, 0.08)
     drift_vec: Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]] = (
@@ -50,12 +51,12 @@ class NZonePhase2Config:
     use_volatility: bool = True
 
     volatile_zone: int = 2
-    volatile_period: int = 20
-    volatile_strength: float = 0.10
+    volatile_period: int = 24
+    volatile_strength: float = 0.08
 
     # hidden context
     fragility_init: float = 0.10
-    fragility_decay: float = 0.005
+    fragility_decay: float = 0.004
     rupture_memory_init: float = 0.00
     rupture_memory_decay: float = 0.96
     conflict_load_init: float = 0.00
@@ -63,30 +64,44 @@ class NZonePhase2Config:
 
     zone_fragility_delta: Tuple[float, float, float] = (0.00, 0.02, 0.04)
 
-    # hidden reliability mode
-    mode_period: int = 30
-    mode_switch_prob: float = 0.60  # chance to switch mode at mode boundary
+    # reliability blocks
+    mode_period: int = 96
+    mode_schedule: Tuple[int, ...] = (0, 1, 2, 1)  # open -> mixed -> guarded -> mixed
     # 0=open, 1=mixed, 2=guarded
 
     # rupture mechanics
-    rupture_base_prob: float = 0.30
-    rupture_fragility_weight: float = 0.80
-    rupture_memory_weight: float = 0.30
-    rupture_load_weight: float = 0.25
-    rupture_reliability_relief: float = 0.20
+    rupture_base_prob: float = 0.24
+    rupture_fragility_weight: float = 0.70
+    rupture_memory_weight: float = 0.28
+    rupture_load_weight: float = 0.22
+    rupture_reliability_relief: float = 0.22
 
     rupture_obs_corrupt_steps: int = 4
     rupture_obs_sigma: float = 3.0
-    rupture_action_slip_prob: float = 0.25
-    rupture_memory_increment: float = 0.30
-    conflict_load_increment: float = 0.25
+    rupture_action_slip_prob: float = 0.22
+    rupture_memory_increment: float = 0.28
+    conflict_load_increment: float = 0.24
 
-    supportive_reliability_delta: float = 0.18
-    misleading_reliability_delta: float = -0.20
+    supportive_reliability_delta: float = 0.22
+    misleading_reliability_delta: float = -0.24
     neutral_reliability_decay: float = 0.02
 
     encounter_delay_min: int = 1
     encounter_delay_max: int = 4
+
+    # NEW: supportive / misleading downstream windows
+    supportive_window_min: int = 4
+    supportive_window_max: int = 8
+    supportive_slip_relief: float = 0.03
+    supportive_drift_relief: float = 0.03
+    supportive_fragility_relief: float = 0.06
+
+    misleading_window_min: int = 3
+    misleading_window_max: int = 7
+    misleading_slip_boost: float = 0.06
+    misleading_drift_boost: float = 0.06
+    misleading_fragility_boost: float = 0.10
+    misleading_extra_rupture_prob: float = 0.35
 
     mirror_x: bool = False
     mirror_actions: bool = False
@@ -148,8 +163,11 @@ class NZonePhase2Env(gym.Env):
         self._rupture_action_timer = 0
         self._rupture_fired_this_step = False
 
-        self._last_outcome = self.OUTCOME_NEUTRAL
         self._last_outcome_code = 1
+
+        # NEW: downstream consequence windows
+        self._supportive_timer = 0
+        self._misleading_timer = 0
 
         self._init_zone_prototypes(seed=0)
 
@@ -193,7 +211,6 @@ class NZonePhase2Env(gym.Env):
         return self.ACTION_STAY
 
     def _encounter_columns(self) -> List[int]:
-        # 0-based: 2,5,8,11,14,17 for width 18
         return [i for i in range(self.W) if (i + 1) % 3 == 0]
 
     def _is_encounter_column(self, x: int) -> bool:
@@ -209,7 +226,6 @@ class NZonePhase2Env(gym.Env):
 
         obs = mu + self._rng.normal(0, sigma, size=(self.base_obs_dim,)).astype(np.float32)
 
-        # fixed encounter percept overlay: same percept, hidden meaning varies by history/mode
         if self._is_encounter_column(self.x):
             dims = [d for d in self.cfg.encounter_dims if 0 <= int(d) < self.base_obs_dim]
             for d in dims:
@@ -224,28 +240,28 @@ class NZonePhase2Env(gym.Env):
 
         return obs.astype(np.float32)
 
-    def _maybe_switch_mode(self) -> None:
-        if self.cfg.mode_period <= 0:
-            return
-        if self.t > 0 and (self.t % int(self.cfg.mode_period) == 0):
-            if self._rng.random() < float(self.cfg.mode_switch_prob):
-                choices = [self.MODE_OPEN, self.MODE_MIXED, self.MODE_GUARDED]
-                choices.remove(self.mode)
-                self.mode = int(self._rng.choice(choices))
+    def _current_block_index(self) -> int:
+        return int(self.t // max(1, int(self.cfg.mode_period)))
+
+    def _update_mode_from_schedule(self) -> None:
+        sched = list(self.cfg.mode_schedule)
+        idx = self._current_block_index() % len(sched)
+        self.mode = int(sched[idx])
 
     def _mode_probs(self) -> Tuple[float, float, float]:
+        # open => supportive-heavy
         if self.mode == self.MODE_OPEN:
-            return (0.65, 0.20, 0.15)
+            return (0.72, 0.18, 0.10)
+        # guarded => misleading-heavy
         if self.mode == self.MODE_GUARDED:
-            return (0.15, 0.20, 0.65)
-        return (0.33, 0.34, 0.33)
+            return (0.10, 0.18, 0.72)
+        # mixed => fairly balanced
+        return (0.30, 0.40, 0.30)
 
     def _sample_encounter_outcome(self) -> int:
         p_sup, p_neu, p_mis = self._mode_probs()
 
-        # small history-sensitive modulation:
-        # if reliability estimate is already high, supportive evidence becomes slightly more likely;
-        # if conflict load is high, misleading evidence becomes slightly more likely.
+        # small contextual modulation
         p_sup = p_sup + 0.10 * max(0.0, self.reliability_estimate)
         p_mis = p_mis + 0.10 * max(0.0, self.conflict_load)
         z = p_sup + p_neu + p_mis
@@ -263,8 +279,13 @@ class NZonePhase2Env(gym.Env):
             self.reliability_estimate = float(np.clip(
                 self.reliability_estimate + float(self.cfg.supportive_reliability_delta), -1.0, 1.0
             ))
-            self.conflict_load = float(np.clip(self.conflict_load - 0.08, 0.0, 1.0))
-            self.fragility = float(np.clip(self.fragility - 0.05, 0.0, 1.0))
+            self.conflict_load = float(np.clip(self.conflict_load - 0.10, 0.0, 1.0))
+            self.fragility = float(np.clip(self.fragility - float(self.cfg.supportive_fragility_relief), 0.0, 1.0))
+
+            self._supportive_timer = int(
+                self._rng.integers(self.cfg.supportive_window_min, self.cfg.supportive_window_max + 1)
+            )
+            self._misleading_timer = 0
             self._last_outcome_code = 0
 
         elif outcome == self.OUTCOME_MISLEADING:
@@ -274,17 +295,28 @@ class NZonePhase2Env(gym.Env):
             self.conflict_load = float(np.clip(
                 self.conflict_load + float(self.cfg.conflict_load_increment), 0.0, 1.0
             ))
-            self.fragility = float(np.clip(self.fragility + 0.12, 0.0, 1.0))
+            self.fragility = float(np.clip(
+                self.fragility + float(self.cfg.misleading_fragility_boost), 0.0, 1.0
+            ))
+
             delay = int(self._rng.integers(self.cfg.encounter_delay_min, self.cfg.encounter_delay_max + 1))
             self.pending_ruptures.append(delay)
+
+            self._misleading_timer = int(
+                self._rng.integers(self.cfg.misleading_window_min, self.cfg.misleading_window_max + 1)
+            )
+            self._supportive_timer = 0
             self._last_outcome_code = 2
 
         else:
-            # neutral
             if self.reliability_estimate > 0:
                 self.reliability_estimate = max(0.0, self.reliability_estimate - self.cfg.neutral_reliability_decay)
             elif self.reliability_estimate < 0:
                 self.reliability_estimate = min(0.0, self.reliability_estimate + self.cfg.neutral_reliability_decay)
+
+            # neutral slowly winds down transient modes
+            self._supportive_timer = max(0, self._supportive_timer - 1)
+            self._misleading_timer = max(0, self._misleading_timer - 1)
             self._last_outcome_code = 1
 
     def _advance_pending_ruptures(self) -> None:
@@ -309,6 +341,10 @@ class NZonePhase2Env(gym.Env):
             + float(self.cfg.rupture_load_weight) * float(self.conflict_load)
             - float(self.cfg.rupture_reliability_relief) * max(0.0, float(self.reliability_estimate))
         )
+
+        if self._misleading_timer > 0:
+            p += float(self.cfg.misleading_extra_rupture_prob)
+
         p = float(np.clip(p, 0.0, 1.0))
 
         if self._rng.random() < p:
@@ -322,11 +358,18 @@ class NZonePhase2Env(gym.Env):
             self.conflict_load = float(np.clip(
                 self.conflict_load + float(self.cfg.conflict_load_increment), 0.0, 1.0
             ))
-            self.reliability_estimate = float(np.clip(self.reliability_estimate - 0.08, -1.0, 1.0))
+            self.reliability_estimate = float(np.clip(self.reliability_estimate - 0.10, -1.0, 1.0))
 
     def _update_hidden_context(self, zid: int) -> None:
         self.fragility += float(self.cfg.zone_fragility_delta[zid])
         self.fragility -= float(self.cfg.fragility_decay)
+
+        # supportive periods make world slightly easier; misleading periods harder
+        if self._supportive_timer > 0:
+            self.fragility -= 0.02
+        if self._misleading_timer > 0:
+            self.fragility += 0.02
+
         self.fragility = float(np.clip(self.fragility, 0.0, 1.0))
 
         self.rupture_memory = float(np.clip(
@@ -336,24 +379,43 @@ class NZonePhase2Env(gym.Env):
             self.conflict_load * float(self.cfg.conflict_load_decay), 0.0, 1.0
         ))
 
+        if self._supportive_timer > 0:
+            self._supportive_timer -= 1
+        if self._misleading_timer > 0:
+            self._misleading_timer -= 1
+
     def _apply_slip(self, action: int, zid: int) -> Tuple[int, bool]:
         p = float(np.clip(self._p_slip_rt[zid], 0.0, 1.0))
+
+        if self._supportive_timer > 0:
+            p = max(0.0, p - float(self.cfg.supportive_slip_relief))
+        if self._misleading_timer > 0:
+            p = min(1.0, p + float(self.cfg.misleading_slip_boost))
+
         if self._rupture_action_timer > 0:
             p = float(np.clip(p + self.cfg.rupture_action_slip_prob, 0.0, 1.0))
+
         if self._rng.random() >= p:
             return action, False
 
-        # use milder corruption than previous version: mostly stay or reverse
         if self._rng.random() < 0.6:
             return self.ACTION_STAY, True
         return self._reverse_action(action), True
 
     def _apply_drift(self, x: int, y: int, zid: int) -> Tuple[int, int, bool]:
         p = float(np.clip(self._p_drift_rt[zid], 0.0, 1.0))
+
+        if self._supportive_timer > 0:
+            p = max(0.0, p - float(self.cfg.supportive_drift_relief))
+        if self._misleading_timer > 0:
+            p = min(1.0, p + float(self.cfg.misleading_drift_boost))
+
         if self._rng.random() >= p:
             return x, y, False
+
         dx, dy = self._drift_vec_rt[zid]
-        return self._clip_xy(x + int(dx), y + int(dy))[0], self._clip_xy(x + int(dx), y + int(dy))[1], True
+        x2, y2 = self._clip_xy(x + int(dx), y + int(dy))
+        return x2, y2, True
 
     def _update_volatility(self, zid: int) -> bool:
         if not self.cfg.use_volatility:
@@ -389,14 +451,15 @@ class NZonePhase2Env(gym.Env):
         self._p_drift_rt = np.array(self.cfg.p_drift, dtype=np.float32)
         self._drift_vec_rt = [tuple(v) for v in self.cfg.drift_vec]
 
-        # Start at right edge of Z0, center row
-        self.x = (self.W // 3) - 1  # for width=18 => 5
+        # start at right edge of Z0, center row
+        self.x = (self.W // 3) - 1  # width=18 => 5
         self.y = self.H // 2
         self.t = 0
 
         self.fragility = float(self.cfg.fragility_init)
         self.rupture_memory = float(self.cfg.rupture_memory_init)
         self.conflict_load = float(self.cfg.conflict_load_init)
+
         self.reliability_estimate = 0.0
         self.mode = self.MODE_MIXED
 
@@ -404,7 +467,10 @@ class NZonePhase2Env(gym.Env):
         self._rupture_obs_timer = 0
         self._rupture_action_timer = 0
         self._rupture_fired_this_step = False
+
         self._last_outcome_code = 1
+        self._supportive_timer = 0
+        self._misleading_timer = 0
 
         obs = self._observe()
         info = {
@@ -417,6 +483,7 @@ class NZonePhase2Env(gym.Env):
             "encounter_type": int(self._last_outcome_code),
             "recent_reliability": float(self.reliability_estimate),
             "reliability_mode": int(self.mode),
+            "reliability_block": int(self._current_block_index()),
             "fragility": float(self.fragility),
             "rupture_memory": float(self.rupture_memory),
             "conflict_load": float(self.conflict_load),
@@ -433,7 +500,7 @@ class NZonePhase2Env(gym.Env):
         old_pos = (self.x, self.y)
         zid_before = self.zone_id()
 
-        self._maybe_switch_mode()
+        self._update_mode_from_schedule()
         volatility_event = self._update_volatility(zid_before)
 
         a_eff, slipped = self._apply_slip(action, zid_before)
@@ -493,10 +560,14 @@ class NZonePhase2Env(gym.Env):
             "encounter_type": int(self._last_outcome_code),  # 0 supportive, 1 neutral, 2 misleading
             "recent_reliability": float(self.reliability_estimate),
             "reliability_mode": int(self.mode),
+            "reliability_block": int(self._current_block_index()),
 
             "fragility": float(self.fragility),
             "rupture_memory": float(self.rupture_memory),
             "conflict_load": float(self.conflict_load),
+
+            "supportive_timer": int(self._supportive_timer),
+            "misleading_timer": int(self._misleading_timer),
 
             "rupture": bool(self._rupture_fired_this_step),
             "pending_ruptures": int(len(self.pending_ruptures)),
@@ -523,7 +594,7 @@ class NZonePhase2Env(gym.Env):
         print("\n".join("".join(row) for row in grid))
         print(
             f"t={self.t} zone={self.zone_id()} pos=({self.x},{self.y}) "
-            f"mode={self.mode} rel={self.reliability_estimate:.2f} "
+            f"mode={self.mode} block={self._current_block_index()} rel={self.reliability_estimate:.2f} "
             f"frag={self.fragility:.2f} rmem={self.rupture_memory:.2f} "
             f"cload={self.conflict_load:.2f} rup={self._rupture_fired_this_step}"
         )

@@ -158,7 +158,6 @@ def main():
     ap.add_argument("--zone_fragility_delta", type=float, nargs=3, default=(0.00, 0.02, 0.04))
 
     ap.add_argument("--mode_period", type=int, default=30)
-    ap.add_argument("--mode_switch_prob", type=float, default=0.60)
 
     ap.add_argument("--rupture_base_prob", type=float, default=0.30)
     ap.add_argument("--rupture_fragility_weight", type=float, default=0.80)
@@ -211,7 +210,6 @@ def main():
         conflict_load_decay=args.conflict_load_decay,
         zone_fragility_delta=tuple(args.zone_fragility_delta),
         mode_period=args.mode_period,
-        mode_switch_prob=args.mode_switch_prob,
         rupture_base_prob=args.rupture_base_prob,
         rupture_fragility_weight=args.rupture_fragility_weight,
         rupture_memory_weight=args.rupture_memory_weight,

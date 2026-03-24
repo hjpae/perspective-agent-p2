@@ -29,7 +29,6 @@ def load_meta(run_dir: Path) -> Dict[str, Any]:
 
 
 def to_jsonable(x):
-    import numpy as np
     if x is None:
         return None
     if isinstance(x, dict):
@@ -69,36 +68,121 @@ def rolling_mean(x: np.ndarray, w: int) -> np.ndarray:
     return out
 
 
-def compute_plasticity(df) -> Dict[str, Any]:
+def _decision_prob_by_reliability_bins(df, bins: np.ndarray):
     m = df["on_encounter"].to_numpy().astype(int) == 1
-    if np.sum(m) < 10:
-        return {"plasticity_raw": None, "plasticity_score": None, "engage_low": None, "engage_high": None}
+    if np.sum(m) < 20:
+        return None
 
-    engage = df.loc[m, "engage"].to_numpy(dtype=np.float32)
     rel = df.loc[m, "recent_reliability"].to_numpy(dtype=np.float32)
+    engage = df.loc[m, "engage"].to_numpy(dtype=np.float32)
+    wait = df.loc[m, "wait"].to_numpy(dtype=np.float32)
+    avoid = df.loc[m, "avoid"].to_numpy(dtype=np.float32)
+    sample = df.loc[m, "sample"].to_numpy(dtype=np.float32)
 
-    q_lo = np.quantile(rel, 0.25)
-    q_hi = np.quantile(rel, 0.75)
+    inds = np.digitize(rel, bins) - 1
+    centers = []
+    engage_curve = []
+    wait_curve = []
+    avoid_curve = []
+    sample_curve = []
+    counts = []
 
-    lo_mask = rel <= q_lo
-    hi_mask = rel >= q_hi
+    for b in range(len(bins) - 1):
+        mm = inds == b
+        if np.sum(mm) > 0:
+            centers.append(0.5 * (bins[b] + bins[b + 1]))
+            engage_curve.append(float(np.mean(engage[mm])))
+            wait_curve.append(float(np.mean(wait[mm])))
+            avoid_curve.append(float(np.mean(avoid[mm])))
+            sample_curve.append(float(np.mean(sample[mm])))
+            counts.append(int(np.sum(mm)))
 
-    engage_low = None if np.sum(lo_mask) == 0 else float(np.mean(engage[lo_mask]))
-    engage_high = None if np.sum(hi_mask) == 0 else float(np.mean(engage[hi_mask]))
+    if len(centers) < 3:
+        return None
 
-    if np.std(rel) < 1e-8 or np.std(engage) < 1e-8:
-        corr = 0.0
-    else:
-        corr = float(np.corrcoef(rel, engage)[0, 1])
-
-    # desirable: positive correlation between reliability evidence and engagement
-    score = float(np.clip((corr + 1.0) / 2.0, 0.0, 1.0))
     return {
-        "plasticity_raw": corr,
+        "centers": np.asarray(centers, dtype=np.float32),
+        "engage": np.asarray(engage_curve, dtype=np.float32),
+        "wait": np.asarray(wait_curve, dtype=np.float32),
+        "avoid": np.asarray(avoid_curve, dtype=np.float32),
+        "sample": np.asarray(sample_curve, dtype=np.float32),
+        "counts": np.asarray(counts, dtype=np.int32),
+    }
+
+
+def compute_plasticity(df) -> Dict[str, Any]:
+    """
+    New plasticity:
+    Not engage-only. Measure whether the decision profile changes as reliability changes.
+
+    We want:
+    - engage to rise with reliability
+    - wait/sample/avoid to shift in complementary ways
+    """
+    bins = np.linspace(-1.0, 1.0, 9)
+    curves = _decision_prob_by_reliability_bins(df, bins)
+    if curves is None:
+        return {
+            "plasticity_raw": None,
+            "plasticity_score": None,
+            "engage_low": None,
+            "engage_high": None,
+            "wait_low": None,
+            "wait_high": None,
+            "profile_shift_L1": None,
+        }
+
+    x = curves["centers"]
+    engage = curves["engage"]
+    wait = curves["wait"]
+    avoid = curves["avoid"]
+    sample = curves["sample"]
+
+    def safe_corr(a, b):
+        if len(a) < 3 or np.std(a) < 1e-8 or np.std(b) < 1e-8:
+            return 0.0
+        return float(np.corrcoef(a, b)[0, 1])
+
+    corr_engage = safe_corr(x, engage)   # should be positive
+    corr_wait = safe_corr(x, wait)       # often negative or curved
+    corr_avoid = safe_corr(x, avoid)     # often negative
+    corr_sample = safe_corr(x, sample)   # may be negative or peaked
+
+    # profile shift: average L1 distance between low-reliability and high-reliability decision profile
+    lo = np.argmin(x)
+    hi = np.argmax(x)
+    p_lo = np.array([engage[lo], wait[lo], avoid[lo], sample[lo]], dtype=np.float32)
+    p_hi = np.array([engage[hi], wait[hi], avoid[hi], sample[hi]], dtype=np.float32)
+    profile_shift = float(np.sum(np.abs(p_hi - p_lo)))
+
+    # stronger weight on engage/avoid, but include overall profile shift
+    raw = 0.50 * corr_engage - 0.25 * corr_avoid + 0.25 * min(1.0, profile_shift)
+    score = float(np.clip((raw + 1.0) / 2.0, 0.0, 1.0))
+
+    return {
+        "plasticity_raw": float(raw),
         "plasticity_score": score,
-        "engage_low": engage_low,
-        "engage_high": engage_high,
-        "delta_engage_hi_lo": None if engage_low is None or engage_high is None else float(engage_high - engage_low),
+        "corr_engage": float(corr_engage),
+        "corr_wait": float(corr_wait),
+        "corr_avoid": float(corr_avoid),
+        "corr_sample": float(corr_sample),
+        "profile_shift_L1": profile_shift,
+
+        "engage_low": float(engage[lo]),
+        "engage_high": float(engage[hi]),
+        "wait_low": float(wait[lo]),
+        "wait_high": float(wait[hi]),
+        "avoid_low": float(avoid[lo]),
+        "avoid_high": float(avoid[hi]),
+        "sample_low": float(sample[lo]),
+        "sample_high": float(sample[hi]),
+
+        "centers": x,
+        "engage_curve": engage,
+        "wait_curve": wait,
+        "avoid_curve": avoid,
+        "sample_curve": sample,
+        "counts": curves["counts"],
     }
 
 
@@ -110,9 +194,14 @@ def compute_stability(df, pre_window: int = 8, post_window: int = 8) -> Dict[str
     if len(rup_idx) == 0:
         return {"overcorrection_index": None, "stability_score": None}
 
+    # Use full decision profile, not just engage
     engage = df["engage"].to_numpy(dtype=np.float32)
+    wait = df["wait"].to_numpy(dtype=np.float32)
+    avoid = df["avoid"].to_numpy(dtype=np.float32)
+    sample = df["sample"].to_numpy(dtype=np.float32)
 
     vals = []
+    engage_vals = []
     for t0 in rup_idx:
         a0 = max(0, t0 - pre_window)
         a1 = t0
@@ -121,17 +210,35 @@ def compute_stability(df, pre_window: int = 8, post_window: int = 8) -> Dict[str
         if (a1 - a0) < 2 or (b1 - b0) < 2:
             continue
 
-        pre = float(np.mean(engage[a0:a1]))
-        post = float(np.mean(engage[b0:b1]))
-        vals.append(abs(post - pre))
+        pre = np.array([
+            np.mean(engage[a0:a1]),
+            np.mean(wait[a0:a1]),
+            np.mean(avoid[a0:a1]),
+            np.mean(sample[a0:a1]),
+        ], dtype=np.float32)
+
+        post = np.array([
+            np.mean(engage[b0:b1]),
+            np.mean(wait[b0:b1]),
+            np.mean(avoid[b0:b1]),
+            np.mean(sample[b0:b1]),
+        ], dtype=np.float32)
+
+        vals.append(float(np.sum(np.abs(post - pre))))
+        engage_vals.append(float(abs(post[0] - pre[0])))
 
     if len(vals) == 0:
         return {"overcorrection_index": None, "stability_score": None}
 
     oci = float(np.mean(vals))
-    stability = float(np.clip(1.0 - oci, 0.0, 1.0))
+    oci_engage = float(np.mean(engage_vals))
+
+    # lower overcorrection = higher stability
+    stability = float(np.clip(1.0 - min(1.0, oci), 0.0, 1.0))
+
     return {
         "overcorrection_index": oci,
+        "overcorrection_engage_only": oci_engage,
         "stability_score": stability,
         "n_events": int(len(vals)),
         "values": vals,
@@ -174,35 +281,28 @@ def make_plots(df, run_dir: Path, summary: Dict[str, Any]) -> None:
     fig_dir = run_dir / "figs"
     fig_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) reliability vs engagement
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    m = df["on_encounter"].to_numpy().astype(int) == 1
-    if np.sum(m) > 0:
-        rel = df.loc[m, "recent_reliability"].to_numpy(dtype=np.float32)
-        engage = df.loc[m, "engage"].to_numpy(dtype=np.float32)
+    # 1) reliability vs decision profile
+    fig, ax = plt.subplots(figsize=(7.5, 4.8))
+    p = summary["plasticity"]
 
-        if len(rel) > 0:
-            bins = np.linspace(-1.0, 1.0, 9)
-            inds = np.digitize(rel, bins) - 1
-            xs, ys = [], []
-            for b in range(len(bins) - 1):
-                mm = inds == b
-                if np.sum(mm) > 0:
-                    xs.append(0.5 * (bins[b] + bins[b+1]))
-                    ys.append(np.mean(engage[mm]))
-            if len(xs) > 0:
-                ax.plot(xs, ys, marker="o")
+    if p["centers"] is not None:
+        x = np.asarray(p["centers"], dtype=np.float32)
+        ax.plot(x, p["engage_curve"], marker="o", label="engage")
+        ax.plot(x, p["wait_curve"], marker="o", label="wait")
+        ax.plot(x, p["avoid_curve"], marker="o", label="avoid")
+        ax.plot(x, p["sample_curve"], marker="o", label="sample")
+        ax.legend(frameon=False)
     ax.set_xlabel("recent_reliability")
-    ax.set_ylabel("engage rate on encounter")
-    ax.set_title("Reliability-conditioned engagement")
+    ax.set_ylabel("decision probability on encounter")
+    ax.set_title("Reliability-conditioned decision profile")
     fig.tight_layout()
-    fig.savefig(fig_dir / "maturity_reliability_vs_engagement.png", dpi=180, bbox_inches="tight")
+    fig.savefig(fig_dir / "maturity_reliability_vs_decision_profile.png", dpi=180, bbox_inches="tight")
     plt.close(fig)
 
     # 2) 2D maturity profile map
     fig, ax = plt.subplots(figsize=(5.5, 5.5))
-    p = summary["plasticity"]["plasticity_score"]
-    s = summary["stability"]["stability_score"]
+    pscore = summary["plasticity"]["plasticity_score"]
+    sscore = summary["stability"]["stability_score"]
 
     ax.axvline(0.55, linestyle="--", linewidth=1)
     ax.axhline(0.55, linestyle="--", linewidth=1)
@@ -214,8 +314,8 @@ def make_plots(df, run_dir: Path, summary: Dict[str, Any]) -> None:
     ax.text(0.78, 0.18, "hyper-\nreactive", ha="center", va="center")
     ax.text(0.18, 0.18, "disorganized", ha="center", va="center")
 
-    if p is not None and s is not None:
-        ax.scatter([p], [s], s=60)
+    if pscore is not None and sscore is not None:
+        ax.scatter([pscore], [sscore], s=60)
     ax.set_xlabel("plasticity score")
     ax.set_ylabel("stability score")
     ax.set_title("Phase 2 maturity profile")
