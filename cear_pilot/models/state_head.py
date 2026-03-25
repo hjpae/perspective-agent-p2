@@ -1,11 +1,5 @@
 # cear_pilot/models/state_head.py
 # -*- coding: utf-8 -*-
-"""
-StateHead: (z_t, p_emb, g_t) -> s_t  (fast manifold)
-
-Policy consumes ONLY s_t.
-This is the main structural change to make g act like an order parameter.
-"""
 
 from __future__ import annotations
 from dataclasses import dataclass
@@ -22,7 +16,7 @@ class StateHeadConfig:
     s_dim: int = 16
     hidden: int = 64
     dropout: float = 0.0
-    g_influence: float = 1.0      # scaling of g input to shape s
+    g_influence: float = 1.0
 
 
 class StateHead(nn.Module):

@@ -12,7 +12,7 @@ import torch.nn as nn
 class DecoderConfig:
     g_dim: int = 12
     n_actions: int = 5
-    obs_dim: int = 5
+    obs_dim: int = 8
     hidden: int = 64
     dropout: float = 0.0
 
@@ -46,9 +46,9 @@ class ObsDecoder(nn.Module):
 
         g = self.g_ln(g_t)
 
-        eye = torch.eye(A, device=device, dtype=dtype).unsqueeze(0).repeat(B, 1, 1)  # (B,A,A)
-        g_rep = g.unsqueeze(1).repeat(1, A, 1)                                       # (B,A,g)
+        eye = torch.eye(A, device=device, dtype=dtype).unsqueeze(0).repeat(B, 1, 1)
+        g_rep = g.unsqueeze(1).repeat(1, A, 1)
 
-        x = torch.cat([g_rep, eye], dim=-1)                                          # (B,A,g+A)
-        out = self.net(x.view(B * A, -1)).view(B, A, -1)                             # (B,A,obs)
+        x = torch.cat([g_rep, eye], dim=-1)
+        out = self.net(x.view(B * A, -1)).view(B, A, -1)
         return out

@@ -8,6 +8,7 @@ import json
 import os
 import random
 import time
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Tuple
@@ -17,7 +18,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from cear_pilot.envs.nzone_phase1 import NZonePhase1Config, NZonePhase1Env
+from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -44,6 +45,7 @@ def seed_everything(seed: int, deterministic: bool = True) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
+
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
@@ -69,8 +71,8 @@ class EMAMeanVar:
             self.var = 0.0
         else:
             m = self.mean
-            self.mean = self.beta * self.mean + (1 - self.beta) * x
-            self.var = self.beta * self.var + (1 - self.beta) * (x - m) * (x - m)
+            self.mean = self.beta * self.mean + (1.0 - self.beta) * x
+            self.var = self.beta * self.var + (1.0 - self.beta) * (x - m) * (x - m)
         std = float(np.sqrt(max(self.var, 0.0) + self.eps))
         return float(self.mean), std
 
@@ -84,6 +86,66 @@ def save_checkpoint(run_dir: Path, tag: str, agent: CEARAgent, decoder: ObsDecod
     torch.save(ckpt, run_dir / f"ckpt_{tag}.pt")
 
 
+def try_save_table(rows, out_path: Path) -> Path:
+    df = pd.DataFrame(rows)
+    try:
+        p = out_path.with_suffix(".parquet")
+        df.to_parquet(p, index=False)
+        return p
+    except Exception:
+        p = out_path.with_suffix(".csv")
+        df.to_csv(p, index=False)
+        return p
+
+
+def action_name(a: int) -> str:
+    return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
+
+
+def print_phase1_status(
+    step: int,
+    episode: int,
+    info: Dict,
+    loss: float,
+    loss_pred: float,
+    loss_smooth: float,
+    loss_actor: float,
+    entropy: float,
+    alpha: float,
+    g_norm: float,
+    recent_actions: deque,
+    recent_x: deque,
+    recent_zone: deque,
+    width: int,
+) -> None:
+    if len(recent_actions) == 0:
+        return
+
+    arr_a = np.array(recent_actions, dtype=np.int32)
+    arr_x = np.array(recent_x, dtype=np.float32)
+    arr_z = np.array(recent_zone, dtype=np.int32)
+
+    right_rate = float(np.mean(arr_a == 3))
+    left_rate = float(np.mean(arr_a == 2))
+    stay_rate = float(np.mean(arr_a == 4))
+    vertical_rate = float(np.mean((arr_a == 0) | (arr_a == 1)))
+    x_mean = float(np.mean(arr_x))
+    x_norm = x_mean / max(1, width - 1)
+
+    zone_counts = np.bincount(arr_z, minlength=5)
+    zone_pref = int(np.argmax(zone_counts))
+
+    print(
+        f"[phase1] step={step:6d} ep={episode:4d} "
+        f"pos=({int(info['x']):2d},{int(info['y']):1d}) zone={int(info['zone_id'])} "
+        f"sigma={float(info['current_sigma']):.3f} "
+        f"loss={loss:.4f} pred={loss_pred:.4f} smooth={loss_smooth:.4f} actor={loss_actor:.4f} "
+        f"H={entropy:.3f} alpha={alpha:.3f} ||g||={g_norm:.3f} | "
+        f"recent_pref: right={right_rate:.2f} left={left_rate:.2f} stay={stay_rate:.2f} vert={vertical_rate:.2f} "
+        f"x_mean={x_mean:.2f} x_norm={x_norm:.2f} dominant_zone={zone_pref}"
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
 
@@ -92,37 +154,49 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="cpu")
 
-    # AAAI-like defaults
     ap.add_argument("--w_smooth", type=float, default=0.25)
     ap.add_argument("--w_entropy", type=float, default=0.01)
     ap.add_argument("--w_actor", type=float, default=0.5)
     ap.add_argument("--actor_b", type=float, default=0.98)
     ap.add_argument("--warmup_steps", type=int, default=12000)
 
-    ap.add_argument("--width", type=int, default=15)
-    ap.add_argument("--height", type=int, default=9)
+    ap.add_argument("--width", type=int, default=23)
+    ap.add_argument("--height", type=int, default=7)
     ap.add_argument("--obs_dim", type=int, default=8)
     ap.add_argument("--max_steps", type=int, default=240)
 
-    ap.add_argument("--zone_sigma", type=float, nargs=3, default=(0.60, 0.30, 0.05))
+    ap.add_argument("--phase1_sigma_left", type=float, default=0.60)
+    ap.add_argument("--phase1_sigma_center", type=float, default=0.30)
+    ap.add_argument("--phase1_sigma_right", type=float, default=0.03)
+    ap.add_argument("--phase1_left_power", type=float, default=0.90)
+    ap.add_argument("--phase1_right_power", type=float, default=1.85)
 
     ap.add_argument("--log_traj", action="store_true")
     ap.add_argument("--log_every", type=int, default=1)
     ap.add_argument("--save_ckpt_every", type=int, default=12000)
+
+    ap.add_argument("--print_every", type=int, default=500)
+    ap.add_argument("--print_window", type=int, default=200)
 
     args = ap.parse_args()
 
     seed_everything(args.seed, deterministic=True)
     device = torch.device(args.device)
 
-    env_cfg = NZonePhase1Config(
+    env_cfg = NZoneCommonConfig(
+        phase="phase1",
         width=args.width,
         height=args.height,
         obs_dim=args.obs_dim,
         max_steps=args.max_steps,
-        zone_sigma=tuple(args.zone_sigma),
+        use_encounter=False,
+        phase1_sigma_left=args.phase1_sigma_left,
+        phase1_sigma_center=args.phase1_sigma_center,
+        phase1_sigma_right=args.phase1_sigma_right,
+        phase1_left_power=args.phase1_left_power,
+        phase1_right_power=args.phase1_right_power,
     )
-    env = NZonePhase1Env(config=env_cfg)
+    env = NZoneCommonEnv(config=env_cfg)
 
     obs, info = env.reset(seed=args.seed)
     try:
@@ -136,11 +210,16 @@ def main():
     agent_cfg = AgentConfig(device=args.device)
     agent_cfg.encoder.obs_dim = args.obs_dim
     agent_cfg.encoder.proprio_dim = n_actions
+
     agent_cfg.world.z_dim = agent_cfg.encoder.z_dim
     agent_cfg.world.p_dim = agent_cfg.encoder.p_dim
+    agent_cfg.world.update_mode = "fixed"
+    agent_cfg.world.alpha_fixed = agent_cfg.world.g_damping
+
     agent_cfg.state.z_dim = agent_cfg.encoder.z_dim
     agent_cfg.state.p_dim = agent_cfg.encoder.p_dim
     agent_cfg.state.g_dim = agent_cfg.world.g_dim
+
     agent_cfg.policy.n_actions = n_actions
     agent_cfg.policy.s_dim = agent_cfg.state.s_dim
 
@@ -162,7 +241,7 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
 
     meta = {
-        "env_type": "phase1",
+        "env_type": "phase1_common",
         "seed": args.seed,
         "steps": args.steps,
         "lr": args.lr,
@@ -192,31 +271,29 @@ def main():
     last_action = 4
     g_prev = agent.get_latents()["g"].detach().clone()
 
-    ema_world = None
-    pi_prev = None
-    kl_ema = None
-    maxpi_ema = None
-    logits_norm_ema = None
-
-    b = None
     err_stats = EMAMeanVar(beta=0.99)
+    b = None
 
     act_hist = np.zeros(n_actions, dtype=np.int64)
-    zone_hist = np.zeros(3, dtype=np.int64)
+    zone_hist = np.zeros(5, dtype=np.int64)
 
-    t0 = time.time()
+    recent_actions = deque(maxlen=args.print_window)
+    recent_x = deque(maxlen=args.print_window)
+    recent_zone = deque(maxlen=args.print_window)
+
     episode = 0
-    t_in_ep = 0
+    t0 = time.time()
 
     try:
         for step in range(args.steps):
             x_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             p_t = make_proprio_from_last_action(last_action, n_actions, device=device)
 
-            out = agent.forward_step(x_t, p_t, ablate_g=False)
+            out = agent.forward_step(x_t, p_t, ablate_g=False, err_t=None)
             g_t = out["g"]
             s_t = out["s"]
             logits_pred = out["logits"]
+            alpha_t = out["alpha"]
 
             logits_act = agent.policy(s_t.detach())
             pi_act = torch.softmax(logits_act, dim=-1)
@@ -240,140 +317,109 @@ def main():
 
             with torch.no_grad():
                 e_val = float(e_chosen.detach().item())
-                _, s = err_stats.update(e_val)
+                _, _ = err_stats.update(e_val)
                 if b is None:
                     b = e_val
                 if args.actor_b > 0.0:
                     b = float(args.actor_b * b + (1.0 - args.actor_b) * e_val)
 
-                baseline = float(b) if (args.actor_b > 0.0) else 0.0
-                adv = -(e_val - baseline)
-                adv = adv / (s + 1e-8)
-                adv = float(np.clip(adv, -5.0, 5.0))
+            adv = float(e_chosen.detach().item()) - float(b)
+            logp = torch.log_softmax(logits_act, dim=-1)[0, a_int]
+            loss_actor = -adv * logp
 
-            logp = F.log_softmax(logits_act, dim=-1)[0, a_int]
-            loss_actor = -(torch.tensor(adv, device=device) * logp)
+            if step < args.warmup_steps:
+                loss = loss_pred + args.w_smooth * loss_smooth - args.w_entropy * entropy
+            else:
+                loss = (
+                    loss_pred
+                    + args.w_smooth * loss_smooth
+                    - args.w_entropy * entropy
+                    + args.w_actor * loss_actor
+                )
 
-            phase = "warmup" if step < int(args.warmup_steps) else "full"
-            w_actor_eff = 0.0 if step < int(args.warmup_steps) else args.w_actor
-
-            with torch.no_grad():
-                H = float(entropy.item())
-                H_target = 1.0
-                bump = max(0.0, (H_target - H) / max(H_target, 1e-6))
-                ent_coef = args.w_entropy * (1.0 + 2.0 * bump)
-
-            loss_world = loss_pred + args.w_smooth * loss_smooth
-            loss = loss_world + w_actor_eff * loss_actor - ent_coef * entropy
-
-            opt.zero_grad(set_to_none=True)
+            opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, 1.0)
             opt.step()
 
-            g_prev = g_t.detach().clone()
-            obs = obs_next
-            last_action = a_int
+            act_hist[a_int] += 1
+            zone_hist[int(info["zone_id"])] += 1
 
-            if args.log_traj and ((step % log_every) == 0):
+            recent_actions.append(a_int)
+            recent_x.append(int(info["x"]))
+            recent_zone.append(int(info["zone_id"]))
+
+            if args.log_traj and (step % log_every == 0):
                 row = {
-                    "t_global": int(step),
+                    "step": int(step),
                     "episode": int(episode),
-                    "t_in_ep": int(t_in_ep),
-                    "phase": str(phase),
-                    "zone_id": int(info.get("zone_id", -1)),
-                    "x": int(info.get("x", -1)),
-                    "y": int(info.get("y", -1)),
+                    "t": int(info["t"]),
+                    "x": int(info["x"]),
+                    "y": int(info["y"]),
+                    "zone_id": int(info["zone_id"]),
+                    "current_sigma": float(info["current_sigma"]),
                     "action": int(a_int),
-                    "entropy": float(entropy.item()),
-                    "loss_pred": float(loss_pred.item()),
-                    "loss_smooth": float(loss_smooth.item()),
-                    "g_norm": float(torch.linalg.vector_norm(g_t).item()),
+                    "action_name": action_name(a_int),
+                    "loss": float(loss.detach().item()),
+                    "loss_pred": float(loss_pred.detach().item()),
+                    "loss_smooth": float(loss_smooth.detach().item()),
+                    "loss_actor": float(loss_actor.detach().item()),
+                    "entropy": float(entropy.detach().item()),
+                    "alpha": float(alpha_t.mean().detach().item()),
+                    "g_norm": float(torch.norm(g_t, dim=-1).mean().detach().item()),
                 }
-                g_np = g_t.detach().squeeze(0).float().cpu().numpy()
-                for i, gv in enumerate(g_np):
-                    row[f"g_{i}"] = float(gv)
+                for i, v in enumerate(g_t.squeeze(0).detach().cpu().numpy()):
+                    row[f"g_{i}"] = float(v)
                 log_rows.append(row)
 
-            t_in_ep += 1
-            if terminated or truncated:
-                obs, info = env.reset(seed=args.seed + episode + 1)
+            if (step + 1) % args.print_every == 0:
+                print_phase1_status(
+                    step=step + 1,
+                    episode=episode,
+                    info=info,
+                    loss=float(loss.detach().item()),
+                    loss_pred=float(loss_pred.detach().item()),
+                    loss_smooth=float(loss_smooth.detach().item()),
+                    loss_actor=float(loss_actor.detach().item()),
+                    entropy=float(entropy.detach().item()),
+                    alpha=float(alpha_t.mean().detach().item()),
+                    g_norm=float(torch.norm(g_t, dim=-1).mean().detach().item()),
+                    recent_actions=recent_actions,
+                    recent_x=recent_x,
+                    recent_zone=recent_zone,
+                    width=args.width,
+                )
+
+            obs = obs_next
+            last_action = a_int
+            g_prev = g_t.detach().clone()
+
+            done = bool(terminated or truncated)
+            if done:
+                episode += 1
+                obs, info = env.reset(seed=int(args.seed + episode))
                 agent.reset(batch_size=1)
                 last_action = 4
                 g_prev = agent.get_latents()["g"].detach().clone()
-                episode += 1
-                t_in_ep = 0
 
-            with torch.no_grad():
-                maxpi = float(pi_act.max(dim=-1).values.mean().item())
-                if pi_prev is None:
-                    kl = 0.0
-                else:
-                    kl_t = torch.sum(
-                        pi_act * (torch.log(pi_act + 1e-9) - torch.log(pi_prev + 1e-9)),
-                        dim=-1,
-                    )
-                    kl = float(kl_t.mean().item())
-                pi_prev = pi_act.detach()
+            if (step + 1) % args.save_ckpt_every == 0:
+                save_checkpoint(run_dir, f"{step+1}", agent, decoder, meta)
 
-                maxpi_ema = maxpi if (maxpi_ema is None) else (0.98 * maxpi_ema + 0.02 * maxpi)
-                kl_ema = kl if (kl_ema is None) else (0.98 * kl_ema + 0.02 * kl)
-                ln = float(torch.mean(torch.abs(logits_act)).item())
-                logits_norm_ema = ln if (logits_norm_ema is None) else (0.98 * logits_norm_ema + 0.02 * ln)
-
-            act_hist[a_int] += 1
-            z = info.get("zone_id", -1)
-            if isinstance(z, (int, np.integer)) and 0 <= int(z) <= 2:
-                zone_hist[int(z)] += 1
-
-            lw = float(loss_world.item())
-            ema_world = lw if ema_world is None else 0.98 * ema_world + 0.02 * lw
-
-            if (step + 1) % 2000 == 0:
-                dt = time.time() - t0
-                with torch.no_grad():
-                    e_det = per_a_err.detach().float().cpu().numpy()
-                    e_min, e_max, e_std = float(e_det.min()), float(e_det.max()), float(e_det.std())
-
-                act_prob = (act_hist / max(act_hist.sum(), 1)).tolist()
-                zone_prob = (zone_hist / max(zone_hist.sum(), 1)).tolist()
-                act_hist[:] = 0
-                zone_hist[:] = 0
-
-                print(
-                    f"[{step+1:>7}/{args.steps}] "
-                    f"phase={phase} "
-                    f"world={lw:.4f} w_ema={float(ema_world):.4f} pred={float(loss_pred.item()):.4f} "
-                    f"smooth={float(loss_smooth.item()):.4f} | "
-                    f"actor={float(loss_actor.item()):.4f} b={0.0 if b is None else float(b):.4f} "
-                    f"H={float(entropy.item()):.3f} maxpi={float(maxpi_ema):.3f} KL={float(kl_ema):.6f} "
-                    f"logits|.|={float(logits_norm_ema):.3f} "
-                    f"e[min,max,std]={e_min:.3f},{e_max:.3f},{e_std:.3f} "
-                    f"zone={[round(x,2) for x in zone_prob]} act={[round(x,2) for x in act_prob]} "
-                    f"(ep={episode}, {dt:.1f}s)"
-                )
-                t0 = time.time()
-
-            if args.save_ckpt_every > 0 and ((step + 1) % args.save_ckpt_every == 0):
-                save_checkpoint(run_dir, f"step{step+1}", agent, decoder, meta)
+        save_checkpoint(run_dir, "final", agent, decoder, meta)
 
     finally:
-        pass
+        if len(log_rows) > 0:
+            try_save_table(log_rows, run_dir / "train_log")
 
-    if args.log_traj and len(log_rows) > 0:
-        df = pd.DataFrame(log_rows)
-        out_parquet = run_dir / "train_traj.parquet"
-        out_csv = run_dir / "train_traj.csv"
-        try:
-            df.to_parquet(out_parquet, index=False)
-            print(f"Saved training trajectory to: {out_parquet}")
-        except Exception as e:
-            print(f"[WARN] Parquet failed ({type(e).__name__}: {e}). Falling back to CSV.")
-            df.to_csv(out_csv, index=False)
-            print(f"Saved training trajectory to: {out_csv}")
-
-    save_checkpoint(run_dir, "final", agent, decoder, meta)
-    print(f"Saved final checkpoint to: {run_dir / 'ckpt_final.pt'}")
+        summary = {
+            "n_steps": int(args.steps),
+            "n_episodes": int(episode + 1),
+            "action_hist": act_hist.tolist(),
+            "zone_hist": zone_hist.tolist(),
+            "elapsed_sec": float(time.time() - t0),
+        }
+        (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        print(f"[phase1] saved to: {run_dir}")
 
 
 if __name__ == "__main__":

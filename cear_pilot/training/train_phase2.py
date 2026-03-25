@@ -8,6 +8,7 @@ import json
 import os
 import random
 import time
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Tuple
@@ -17,7 +18,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from cear_pilot.envs.nzone_phase2 import NZonePhase2Config, NZonePhase2Env
+from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -44,6 +45,7 @@ def seed_everything(seed: int, deterministic: bool = True) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
+
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
@@ -69,8 +71,8 @@ class EMAMeanVar:
             self.var = 0.0
         else:
             m = self.mean
-            self.mean = self.beta * self.mean + (1 - self.beta) * x
-            self.var = self.beta * self.var + (1 - self.beta) * (x - m) * (x - m)
+            self.mean = self.beta * self.mean + (1.0 - self.beta) * x
+            self.var = self.beta * self.var + (1.0 - self.beta) * (x - m) * (x - m)
         std = float(np.sqrt(max(self.var, 0.0) + self.eps))
         return float(self.mean), std
 
@@ -84,12 +86,30 @@ def save_checkpoint(run_dir: Path, tag: str, agent: CEARAgent, decoder: ObsDecod
     torch.save(ckpt, run_dir / f"ckpt_{tag}.pt")
 
 
+def try_save_table(rows, out_path: Path) -> Path:
+    df = pd.DataFrame(rows)
+    try:
+        p = out_path.with_suffix(".parquet")
+        df.to_parquet(p, index=False)
+        return p
+    except Exception:
+        p = out_path.with_suffix(".csv")
+        df.to_csv(p, index=False)
+        return p
+
+
+def action_name(a: int) -> str:
+    return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
+
+
 def load_phase1_checkpoint(
     ckpt_path: str,
     device: str,
     obs_dim_override: int | None = None,
-    g_damping_override: float | None = None,
-    g_influence_override: float | None = None,
+    update_mode: str = "fixed",
+    alpha_fixed: float = 0.10,
+    alpha_min: float = 0.03,
+    alpha_max: float = 0.30,
 ):
     ckpt = torch.load(ckpt_path, map_location=device)
     meta = ckpt["meta"]
@@ -102,10 +122,11 @@ def load_phase1_checkpoint(
 
     if obs_dim_override is not None:
         agent_cfg.encoder.obs_dim = int(obs_dim_override)
-    if g_damping_override is not None:
-        agent_cfg.world.g_damping = float(g_damping_override)
-    if g_influence_override is not None:
-        agent_cfg.state.g_influence = float(g_influence_override)
+
+    agent_cfg.world.update_mode = str(update_mode)
+    agent_cfg.world.alpha_fixed = float(alpha_fixed)
+    agent_cfg.world.alpha_min = float(alpha_min)
+    agent_cfg.world.alpha_max = float(alpha_max)
 
     agent = CEARAgent(agent_cfg)
     agent.load_state_dict(ckpt["agent_state"])
@@ -119,67 +140,141 @@ def load_phase1_checkpoint(
     return agent, decoder, meta
 
 
+def build_evidence_pressure(
+    pred_now: float,
+    pred_ema: float,
+    info: Dict,
+) -> float:
+    """
+    Composite evidence-integration pressure for adaptive alpha.
+
+    This is the key signal for the maturity assay.
+    It combines:
+    - immediate prediction mismatch
+    - accumulated mismatch
+    - encounter exposure depth
+    - rupture occurrence
+    - misleading/reliability pressure
+    - conflict accumulation
+    - fragility
+
+    Keep this scalar; the world_latent alpha-net already learns how to use it.
+    """
+    on_enc = float(info.get("on_encounter", 0))
+    row_exposure = float(info.get("row_exposure_mult", 1.0))
+    rupture = float(info.get("rupture", 0))
+    reliability = float(info.get("reliability_estimate", 0.0))
+    conflict_load = float(info.get("conflict_load", 0.0))
+    fragility = float(info.get("fragility", 0.0))
+    encounter_outcome = int(info.get("encounter_outcome", 1))
+
+    misleading_pressure = max(0.0, -reliability)
+    supportive_relief = max(0.0, reliability)
+
+    # outcome-sensitive exposure term
+    if encounter_outcome == 2:   # misleading
+        outcome_term = 1.25 * on_enc * row_exposure
+    elif encounter_outcome == 0: # supportive
+        outcome_term = -0.50 * on_enc * row_exposure
+    else:
+        outcome_term = 0.30 * on_enc * row_exposure
+
+    err_value = (
+        0.30 * pred_now
+        + 0.22 * pred_ema
+        + 0.14 * outcome_term
+        + 0.14 * rupture
+        + 0.10 * misleading_pressure
+        + 0.06 * conflict_load
+        + 0.04 * fragility
+        - 0.05 * supportive_relief
+    )
+    return float(max(0.0, err_value))
+
+
+def print_phase2_status(
+    step: int,
+    episode: int,
+    info: Dict,
+    loss: float,
+    loss_pred: float,
+    loss_smooth: float,
+    loss_actor: float,
+    entropy: float,
+    alpha: float,
+    g_norm: float,
+    recent_actions: deque,
+    recent_x: deque,
+    recent_zone: deque,
+    width: int,
+) -> None:
+    if len(recent_actions) == 0:
+        return
+
+    arr_a = np.array(recent_actions, dtype=np.int32)
+    arr_x = np.array(recent_x, dtype=np.float32)
+    arr_z = np.array(recent_zone, dtype=np.int32)
+
+    right_rate = float(np.mean(arr_a == 3))
+    left_rate = float(np.mean(arr_a == 2))
+    stay_rate = float(np.mean(arr_a == 4))
+    vertical_rate = float(np.mean((arr_a == 0) | (arr_a == 1)))
+    x_mean = float(np.mean(arr_x))
+    x_norm = x_mean / max(1, width - 1)
+
+    zone_counts = np.bincount(arr_z, minlength=5)
+    zone_pref = int(np.argmax(zone_counts))
+
+    print(
+        f"[phase2] step={step:6d} ep={episode:4d} "
+        f"pos=({int(info['x']):2d},{int(info['y']):1d}) zone={int(info['zone_id'])} "
+        f"sigma={float(info['current_sigma']):.3f} enc={int(info.get('on_encounter', 0))} "
+        f"profile={str(info.get('encounter_profile', 'none'))} outcome={int(info.get('encounter_outcome', 1))} "
+        f"rel={float(info.get('reliability_estimate', 0.0)):.3f} "
+        f"frag={float(info.get('fragility', 0.0)):.3f} load={float(info.get('conflict_load', 0.0)):.3f} "
+        f"rup={int(info.get('rupture', 0))} "
+        f"loss={loss:.4f} pred={loss_pred:.4f} smooth={loss_smooth:.4f} actor={loss_actor:.4f} "
+        f"H={entropy:.3f} alpha={alpha:.3f} ||g||={g_norm:.3f} | "
+        f"recent_pref: right={right_rate:.2f} left={left_rate:.2f} stay={stay_rate:.2f} vert={vertical_rate:.2f} "
+        f"x_mean={x_mean:.2f} x_norm={x_norm:.2f} dominant_zone={zone_pref}"
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
 
     ap.add_argument("--phase1_ckpt", type=str, required=True)
-    ap.add_argument("--steps", type=int, default=48000)
+    ap.add_argument("--steps", type=int, default=36000)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="cpu")
 
-    # maturity-oriented defaults: weaker actor, stronger entropy than collapse-prone version
     ap.add_argument("--w_smooth", type=float, default=0.05)
     ap.add_argument("--w_entropy", type=float, default=0.02)
     ap.add_argument("--w_actor", type=float, default=0.05)
     ap.add_argument("--actor_b", type=float, default=0.98)
     ap.add_argument("--warmup_steps", type=int, default=1000)
 
-    # phase2 env
-    ap.add_argument("--width", type=int, default=18)
-    ap.add_argument("--height", type=int, default=9)
+    ap.add_argument("--width", type=int, default=23)
+    ap.add_argument("--height", type=int, default=7)
     ap.add_argument("--obs_dim", type=int, default=8)
     ap.add_argument("--max_steps", type=int, default=240)
 
-    ap.add_argument("--zone_sigma", type=float, nargs=3, default=(0.42, 0.30, 0.20))
-    ap.add_argument("--p_slip", type=float, nargs=3, default=(0.00, 0.03, 0.08))
-    ap.add_argument("--p_drift", type=float, nargs=3, default=(0.00, 0.04, 0.08))
-    ap.add_argument("--drift_vec", type=int, nargs=6, default=(0, 0, 1, 0, -1, 0))
-    ap.add_argument("--volatile_zone", type=int, default=2)
-    ap.add_argument("--volatile_period", type=int, default=20)
-    ap.add_argument("--volatile_strength", type=float, default=0.10)
+    ap.add_argument("--phase2_sigma_left", type=float, default=0.50)
+    ap.add_argument("--phase2_sigma_right", type=float, default=0.05)
 
-    ap.add_argument("--fragility_init", type=float, default=0.10)
-    ap.add_argument("--fragility_decay", type=float, default=0.005)
-    ap.add_argument("--rupture_memory_init", type=float, default=0.00)
-    ap.add_argument("--rupture_memory_decay", type=float, default=0.96)
-    ap.add_argument("--conflict_load_init", type=float, default=0.00)
-    ap.add_argument("--conflict_load_decay", type=float, default=0.95)
-    ap.add_argument("--zone_fragility_delta", type=float, nargs=3, default=(0.00, 0.02, 0.04))
-
-    ap.add_argument("--mode_period", type=int, default=30)
-
-    ap.add_argument("--rupture_base_prob", type=float, default=0.30)
-    ap.add_argument("--rupture_fragility_weight", type=float, default=0.80)
-    ap.add_argument("--rupture_memory_weight", type=float, default=0.30)
-    ap.add_argument("--rupture_load_weight", type=float, default=0.25)
-    ap.add_argument("--rupture_reliability_relief", type=float, default=0.20)
-
-    ap.add_argument("--rupture_obs_corrupt_steps", type=int, default=4)
-    ap.add_argument("--rupture_obs_sigma", type=float, default=3.0)
-    ap.add_argument("--rupture_action_slip_prob", type=float, default=0.25)
-    ap.add_argument("--rupture_memory_increment", type=float, default=0.30)
-    ap.add_argument("--conflict_load_increment", type=float, default=0.25)
-
-    # optional overrides for phase2 to make g a bit more influential without touching model files
-    ap.add_argument("--g_damping_override", type=float, default=0.20)
-    ap.add_argument("--g_influence_override", type=float, default=2.5)
+    ap.add_argument("--update_mode", type=str, default="adaptive", choices=["fixed", "adaptive"])
+    ap.add_argument("--alpha_fixed", type=float, default=0.10)
+    ap.add_argument("--alpha_min", type=float, default=0.03)
+    ap.add_argument("--alpha_max", type=float, default=0.30)
 
     ap.add_argument("--log_traj", action="store_true")
     ap.add_argument("--log_every", type=int, default=1)
     ap.add_argument("--save_ckpt_every", type=int, default=12000)
 
-    # default: carry g across episodes in phase2
+    ap.add_argument("--print_every", type=int, default=500)
+    ap.add_argument("--print_window", type=int, default=200)
+
     ap.add_argument("--reset_g_every_episode", action="store_true")
 
     args = ap.parse_args()
@@ -187,41 +282,17 @@ def main():
     seed_everything(args.seed, deterministic=True)
     device = torch.device(args.device)
 
-    dv = args.drift_vec
-    drift_vec = ((dv[0], dv[1]), (dv[2], dv[3]), (dv[4], dv[5]))
-
-    env_cfg = NZonePhase2Config(
+    env_cfg = NZoneCommonConfig(
+        phase="phase2",
         width=args.width,
         height=args.height,
         obs_dim=args.obs_dim,
         max_steps=args.max_steps,
-        zone_sigma=tuple(args.zone_sigma),
-        p_slip=tuple(args.p_slip),
-        p_drift=tuple(args.p_drift),
-        drift_vec=drift_vec,
-        volatile_zone=args.volatile_zone,
-        volatile_period=args.volatile_period,
-        volatile_strength=args.volatile_strength,
-        fragility_init=args.fragility_init,
-        fragility_decay=args.fragility_decay,
-        rupture_memory_init=args.rupture_memory_init,
-        rupture_memory_decay=args.rupture_memory_decay,
-        conflict_load_init=args.conflict_load_init,
-        conflict_load_decay=args.conflict_load_decay,
-        zone_fragility_delta=tuple(args.zone_fragility_delta),
-        mode_period=args.mode_period,
-        rupture_base_prob=args.rupture_base_prob,
-        rupture_fragility_weight=args.rupture_fragility_weight,
-        rupture_memory_weight=args.rupture_memory_weight,
-        rupture_load_weight=args.rupture_load_weight,
-        rupture_reliability_relief=args.rupture_reliability_relief,
-        rupture_obs_corrupt_steps=args.rupture_obs_corrupt_steps,
-        rupture_obs_sigma=args.rupture_obs_sigma,
-        rupture_action_slip_prob=args.rupture_action_slip_prob,
-        rupture_memory_increment=args.rupture_memory_increment,
-        conflict_load_increment=args.conflict_load_increment,
+        use_encounter=True,
+        phase2_sigma_left=args.phase2_sigma_left,
+        phase2_sigma_right=args.phase2_sigma_right,
     )
-    env = NZonePhase2Env(config=env_cfg)
+    env = NZoneCommonEnv(config=env_cfg)
 
     obs, info = env.reset(seed=args.seed)
     try:
@@ -234,8 +305,10 @@ def main():
         ckpt_path=args.phase1_ckpt,
         device=args.device,
         obs_dim_override=args.obs_dim,
-        g_damping_override=args.g_damping_override,
-        g_influence_override=args.g_influence_override,
+        update_mode=args.update_mode,
+        alpha_fixed=args.alpha_fixed,
+        alpha_min=args.alpha_min,
+        alpha_max=args.alpha_max,
     )
     agent.to(device)
     decoder.to(device)
@@ -249,7 +322,7 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
 
     meta = {
-        "env_type": "phase2",
+        "env_type": "phase2_common",
         "seed": args.seed,
         "steps": args.steps,
         "lr": args.lr,
@@ -278,42 +351,35 @@ def main():
     log_rows = []
     log_every = int(max(1, args.log_every))
 
-    # initialize agent ONCE; carry g by default
     agent.reset(batch_size=1)
     last_action = 4
     g_prev = agent.get_latents()["g"].detach().clone()
 
-    ema_world = None
-    pi_prev = None
-    kl_ema = None
-    maxpi_ema = None
-    logits_norm_ema = None
+    pred_err_ema = EMAMeanVar(beta=0.97)
+    actor_baseline = None
+    prev_err_t = torch.zeros((1, 1), dtype=torch.float32, device=device)
 
-    b = None
-    err_stats = EMAMeanVar(beta=0.99)
+    episode = 0
+    t0 = time.time()
 
     act_hist = np.zeros(n_actions, dtype=np.int64)
-    zone_hist = np.zeros(3, dtype=np.int64)
+    zone_hist = np.zeros(5, dtype=np.int64)
 
-    enc_hist = 0
-    rup_hist = 0
-    sup_hist = 0
-    neu_hist = 0
-    mis_hist = 0
-
-    t0 = time.time()
-    episode = 0
-    t_in_ep = 0
+    recent_actions = deque(maxlen=args.print_window)
+    recent_x = deque(maxlen=args.print_window)
+    recent_zone = deque(maxlen=args.print_window)
 
     try:
         for step in range(args.steps):
             x_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             p_t = make_proprio_from_last_action(last_action, n_actions, device=device)
 
-            out = agent.forward_step(x_t, p_t, ablate_g=False)
+            # alpha at this step responds to previously accumulated evidence pressure
+            out = agent.forward_step(x_t, p_t, ablate_g=False, err_t=prev_err_t)
             g_t = out["g"]
             s_t = out["s"]
             logits_pred = out["logits"]
+            alpha_t = out["alpha"]
 
             logits_act = agent.policy(s_t.detach())
             pi_act = torch.softmax(logits_act, dim=-1)
@@ -322,7 +388,7 @@ def main():
             a_t = agent.policy.sample_action(logits_act, greedy=False)
             a_int = int(a_t.item())
 
-            obs_next, _, terminated, truncated, info = env.step(a_int)
+            obs_next, _, terminated, truncated, info2 = env.step(a_int)
             x_next = torch.tensor(obs_next, dtype=torch.float32, device=device).unsqueeze(0)
 
             xhat_all = decoder.predict_all_actions(g_t)
@@ -336,179 +402,134 @@ def main():
             e_chosen = per_a_err[a_int]
 
             with torch.no_grad():
-                e_val = float(e_chosen.detach().item())
-                _, s = err_stats.update(e_val)
+                pred_now = float(e_chosen.detach().item())
+                pred_hist, _ = pred_err_ema.update(pred_now)
 
-                if b is None:
-                    b = e_val
+                if actor_baseline is None:
+                    actor_baseline = pred_now
                 if args.actor_b > 0.0:
-                    b = float(args.actor_b * b + (1.0 - args.actor_b) * e_val)
+                    actor_baseline = float(args.actor_b * actor_baseline + (1.0 - args.actor_b) * pred_now)
 
-                baseline = float(b) if (args.actor_b > 0.0) else 0.0
-                adv = -(e_val - baseline)
-                adv = adv / (s + 1e-8)
-                adv = float(np.clip(adv, -5.0, 5.0))
+                err_value = build_evidence_pressure(
+                    pred_now=pred_now,
+                    pred_ema=pred_hist,
+                    info=info2,
+                )
+                err_t = torch.tensor([[err_value]], dtype=torch.float32, device=device)
 
-            logp = F.log_softmax(logits_act, dim=-1)[0, a_int]
-            loss_actor = -(torch.tensor(adv, device=device) * logp)
+            adv = float(e_chosen.detach().item()) - float(actor_baseline)
+            logp = torch.log_softmax(logits_act, dim=-1)[0, a_int]
+            loss_actor = -adv * logp
 
-            phase = "warmup" if step < int(args.warmup_steps) else "full"
-            w_actor_eff = 0.0 if step < int(args.warmup_steps) else args.w_actor
+            if step < args.warmup_steps:
+                loss = loss_pred + args.w_smooth * loss_smooth - args.w_entropy * entropy
+            else:
+                loss = (
+                    loss_pred
+                    + args.w_smooth * loss_smooth
+                    - args.w_entropy * entropy
+                    + args.w_actor * loss_actor
+                )
 
-            loss_world = loss_pred + args.w_smooth * loss_smooth
-            loss = loss_world + w_actor_eff * loss_actor - args.w_entropy * entropy
-
-            opt.zero_grad(set_to_none=True)
+            opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, 1.0)
             opt.step()
 
-            g_prev = g_t.detach().clone()
-            obs = obs_next
-            last_action = a_int
+            act_hist[a_int] += 1
+            zone_hist[int(info2["zone_id"])] += 1
 
-            enc_hist += int(bool(info.get("encounter_event", False)))
-            rup_hist += int(bool(info.get("rupture", False)))
-            if int(info.get("encounter_type", 1)) == 0:
-                sup_hist += int(bool(info.get("encounter_event", False)))
-            elif int(info.get("encounter_type", 1)) == 1:
-                neu_hist += int(bool(info.get("encounter_event", False)))
-            elif int(info.get("encounter_type", 1)) == 2:
-                mis_hist += int(bool(info.get("encounter_event", False)))
+            recent_actions.append(a_int)
+            recent_x.append(int(info2["x"]))
+            recent_zone.append(int(info2["zone_id"]))
 
-            if args.log_traj and ((step % log_every) == 0):
-                z = info.get("zone_id", -1)
-                with torch.no_grad():
-                    g_np = g_t.detach().squeeze(0).float().cpu().numpy()
-                    g_norm = float(torch.linalg.vector_norm(g_t).item())
-                    ent_val = float(entropy.item())
-
+            if args.log_traj and (step % log_every == 0):
                 row = {
-                    "t_global": int(step),
+                    "step": int(step),
                     "episode": int(episode),
-                    "t_in_ep": int(t_in_ep),
-                    "phase": str(phase),
-                    "zone_id": int(z),
-                    "x": int(info.get("x", -1)),
-                    "y": int(info.get("y", -1)),
+                    "t": int(info2["t"]),
+                    "x": int(info2["x"]),
+                    "y": int(info2["y"]),
+                    "zone_id": int(info2["zone_id"]),
+                    "on_encounter": int(info2.get("on_encounter", 0)),
+                    "encounter_idx": int(info2.get("encounter_idx", -1)),
+                    "encounter_profile": str(info2.get("encounter_profile", "none")),
+                    "encounter_outcome": int(info2.get("encounter_outcome", 1)),
+                    "row_band": str(info2.get("row_band", "balanced")),
+                    "row_exposure_mult": float(info2.get("row_exposure_mult", 1.0)),
+                    "current_sigma": float(info2["current_sigma"]),
+                    "reliability_estimate": float(info2.get("reliability_estimate", 0.0)),
+                    "fragility": float(info2.get("fragility", 0.0)),
+                    "rupture_memory": float(info2.get("rupture_memory", 0.0)),
+                    "conflict_load": float(info2.get("conflict_load", 0.0)),
+                    "rupture": int(info2.get("rupture", 0)),
+                    "evidence_pressure": float(err_value),
                     "action": int(a_int),
-                    "entropy": float(ent_val),
-                    "g_norm": float(g_norm),
-                    "loss_pred": float(loss_pred.item()),
-                    "loss_smooth": float(loss_smooth.item()),
-
-                    "on_encounter": int(bool(info.get("on_encounter", False))),
-                    "encounter_event": int(bool(info.get("encounter_event", False))),
-                    "encounter_type": int(info.get("encounter_type", 1)),
-                    "recent_reliability": float(info.get("recent_reliability", 0.0)),
-                    "reliability_mode": int(info.get("reliability_mode", 1)),
-
-                    "fragility": float(info.get("fragility", np.nan)),
-                    "rupture_memory": float(info.get("rupture_memory", np.nan)),
-                    "conflict_load": float(info.get("conflict_load", np.nan)),
-                    "rupture": int(bool(info.get("rupture", False))),
-                    "pending_ruptures": int(info.get("pending_ruptures", 0)),
-                    "slip": int(bool(info.get("slip", False))),
-                    "drift": int(bool(info.get("drift", False))),
+                    "action_name": action_name(a_int),
+                    "loss": float(loss.detach().item()),
+                    "loss_pred": float(loss_pred.detach().item()),
+                    "loss_smooth": float(loss_smooth.detach().item()),
+                    "loss_actor": float(loss_actor.detach().item()),
+                    "entropy": float(entropy.detach().item()),
+                    "alpha": float(alpha_t.mean().detach().item()),
+                    "g_norm": float(torch.norm(g_t, dim=-1).mean().detach().item()),
                 }
-                for i, gv in enumerate(g_np):
-                    row[f"g_{i}"] = float(gv)
+                for i, v in enumerate(g_t.squeeze(0).detach().cpu().numpy()):
+                    row[f"g_{i}"] = float(v)
                 log_rows.append(row)
 
-            t_in_ep += 1
-            if terminated or truncated:
-                obs, info = env.reset(seed=args.seed + episode + 1)
-
-                if args.reset_g_every_episode:
-                    agent.reset(batch_size=1)
-
-                g_prev = agent.get_latents()["g"].detach().clone()
-                last_action = 4
-                episode += 1
-                t_in_ep = 0
-
-            with torch.no_grad():
-                maxpi = float(pi_act.max(dim=-1).values.mean().item())
-                if pi_prev is None:
-                    kl = 0.0
-                else:
-                    kl_t = torch.sum(
-                        pi_act * (torch.log(pi_act + 1e-9) - torch.log(pi_prev + 1e-9)),
-                        dim=-1,
-                    )
-                    kl = float(kl_t.mean().item())
-                pi_prev = pi_act.detach()
-
-                maxpi_ema = maxpi if (maxpi_ema is None) else (0.98 * maxpi_ema + 0.02 * maxpi)
-                kl_ema = kl if (kl_ema is None) else (0.98 * kl_ema + 0.02 * kl)
-
-                ln = float(torch.mean(torch.abs(logits_act)).item())
-                logits_norm_ema = ln if (logits_norm_ema is None) else (0.98 * logits_norm_ema + 0.02 * ln)
-
-            act_hist[a_int] += 1
-            z = info.get("zone_id", -1)
-            if isinstance(z, (int, np.integer)) and 0 <= int(z) <= 2:
-                zone_hist[int(z)] += 1
-
-            lw = float(loss_world.item())
-            ema_world = lw if ema_world is None else 0.98 * ema_world + 0.02 * lw
-
-            if (step + 1) % 2000 == 0:
-                dt = time.time() - t0
-                with torch.no_grad():
-                    e_det = per_a_err.detach().float().cpu().numpy()
-                    e_min, e_max, e_std = float(e_det.min()), float(e_det.max()), float(e_det.std())
-
-                act_prob = (act_hist / max(act_hist.sum(), 1)).tolist()
-                zone_prob = (zone_hist / max(zone_hist.sum(), 1)).tolist()
-
-                print(
-                    f"[{step+1:>7}/{args.steps}] "
-                    f"phase={phase} "
-                    f"world={lw:.4f} w_ema={float(ema_world):.4f} pred={float(loss_pred.item()):.4f} "
-                    f"smooth={float(loss_smooth.item()):.4f} | "
-                    f"actor={float(loss_actor.item()):.4f} b={0.0 if b is None else float(b):.4f} "
-                    f"H={float(entropy.item()):.3f} maxpi={float(maxpi_ema):.3f} KL={float(kl_ema):.6f} "
-                    f"logits|.|={float(logits_norm_ema):.3f} "
-                    f"e[min,max,std]={e_min:.3f},{e_max:.3f},{e_std:.3f} "
-                    f"zone={[round(x,2) for x in zone_prob]} act={[round(x,2) for x in act_prob]} "
-                    f"enc_win={enc_hist} rup_win={rup_hist} sup={sup_hist} neu={neu_hist} mis={mis_hist} "
-                    f"frag={float(info.get('fragility', np.nan)):.2f} "
-                    f"rmem={float(info.get('rupture_memory', np.nan)):.2f} "
-                    f"rel={float(info.get('recent_reliability', 0.0)):.2f} "
-                    f"carry_g={int(not args.reset_g_every_episode)} "
-                    f"(ep={episode}, {dt:.1f}s)"
+            if (step + 1) % args.print_every == 0:
+                print_phase2_status(
+                    step=step + 1,
+                    episode=episode,
+                    info=info2,
+                    loss=float(loss.detach().item()),
+                    loss_pred=float(loss_pred.detach().item()),
+                    loss_smooth=float(loss_smooth.detach().item()),
+                    loss_actor=float(loss_actor.detach().item()),
+                    entropy=float(entropy.detach().item()),
+                    alpha=float(alpha_t.mean().detach().item()),
+                    g_norm=float(torch.norm(g_t, dim=-1).mean().detach().item()),
+                    recent_actions=recent_actions,
+                    recent_x=recent_x,
+                    recent_zone=recent_zone,
+                    width=args.width,
                 )
 
-                act_hist[:] = 0
-                zone_hist[:] = 0
-                enc_hist = 0
-                rup_hist = 0
-                sup_hist = 0
-                neu_hist = 0
-                mis_hist = 0
-                t0 = time.time()
+            obs = obs_next
+            info = info2
+            last_action = a_int
+            g_prev = g_t.detach().clone()
+            prev_err_t = err_t.detach()
 
-            if args.save_ckpt_every > 0 and ((step + 1) % args.save_ckpt_every == 0):
-                save_checkpoint(run_dir, f"step{step+1}", agent, decoder, meta)
+            done = bool(terminated or truncated)
+            if done:
+                episode += 1
+                obs, info = env.reset(seed=int(args.seed + episode))
+                if args.reset_g_every_episode:
+                    agent.reset(batch_size=1)
+                last_action = 4
+                g_prev = agent.get_latents()["g"].detach().clone()
+                prev_err_t = torch.zeros((1, 1), dtype=torch.float32, device=device)
+
+            if (step + 1) % args.save_ckpt_every == 0:
+                save_checkpoint(run_dir, f"{step+1}", agent, decoder, meta)
+
+        save_checkpoint(run_dir, "final", agent, decoder, meta)
 
     finally:
-        pass
+        if len(log_rows) > 0:
+            try_save_table(log_rows, run_dir / "train_log")
 
-    if args.log_traj and len(log_rows) > 0:
-        df = pd.DataFrame(log_rows)
-        out_parquet = run_dir / "train_traj.parquet"
-        out_csv = run_dir / "train_traj.csv"
-        try:
-            df.to_parquet(out_parquet, index=False)
-            print(f"Saved training trajectory to: {out_parquet}")
-        except Exception as e:
-            print(f"[WARN] Parquet failed ({type(e).__name__}: {e}). Falling back to CSV.")
-            df.to_csv(out_csv, index=False)
-            print(f"Saved training trajectory to: {out_csv}")
-
-    save_checkpoint(run_dir, "final", agent, decoder, meta)
-    print(f"Saved final checkpoint to: {run_dir / 'ckpt_final.pt'}")
+        summary = {
+            "n_steps": int(args.steps),
+            "n_episodes": int(episode + 1),
+            "action_hist": act_hist.tolist(),
+            "zone_hist": zone_hist.tolist(),
+            "elapsed_sec": float(time.time() - t0),
+        }
+        (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        print(f"[phase2] saved to: {run_dir}")
 
 
 if __name__ == "__main__":

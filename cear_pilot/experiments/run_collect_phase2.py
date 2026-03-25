@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 import numpy as np
+import pandas as pd
 import torch
 
-from cear_pilot.envs.nzone_phase2 import NZonePhase2Config, NZonePhase2Env
+from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -26,7 +27,6 @@ def ensure_dir(p: Path) -> None:
 
 
 def try_save_table(rows, out_path: Path) -> Path:
-    import pandas as pd
     df = pd.DataFrame(rows)
     try:
         p = out_path.with_suffix(".parquet")
@@ -45,8 +45,8 @@ def onehot(idx: int, n: int) -> np.ndarray:
 
 
 def build_agent_from_meta(meta: Dict[str, Any], device: str):
-    env_cfg = NZonePhase2Config(**meta["env_cfg"])
-    env = NZonePhase2Env(config=env_cfg)
+    env_cfg = NZoneCommonConfig(**meta["env_cfg"])
+    env = NZoneCommonEnv(config=env_cfg)
 
     agent_cfg = AgentConfig(device=device)
     agent_cfg.encoder.__dict__.update(meta["agent_cfg"]["encoder"])
@@ -61,14 +61,14 @@ def build_agent_from_meta(meta: Dict[str, Any], device: str):
 
 
 def decision_code(action: int) -> int:
-    # 0=avoid(left), 1=wait(stay), 2=engage(right), 3=sample(up/down)
+    # coarse stance label for later analysis
     if int(action) == 2:
-        return 0
+        return 0  # withdraw / left
     if int(action) == 4:
-        return 1
+        return 1  # wait
     if int(action) == 3:
-        return 2
-    return 3
+        return 2  # engage / right
+    return 3      # vertical shift / sample
 
 
 def main():
@@ -81,7 +81,6 @@ def main():
     ap.add_argument("--outdir", type=str, default="")
     ap.add_argument("--ablate_g", action="store_true")
 
-    # optional g intervention
     ap.add_argument("--do_g_at", type=int, default=-1)
     ap.add_argument("--do_g_mode", type=str, default="shock", choices=["shock", "swap", "zero"])
     ap.add_argument("--do_g_scale", type=float, default=1.0)
@@ -102,7 +101,7 @@ def main():
     ensure_dir(run_dir / "figs")
 
     run_meta = {
-        "mode": "collect_phase2_maturity",
+        "mode": "collect_phase2",
         "ckpt": str(Path(args.ckpt).resolve()),
         "episodes": int(args.episodes),
         "seed": int(args.seed),
@@ -128,6 +127,7 @@ def main():
 
         done = False
         t = 0
+        g_prev = None
 
         while not done:
             if args.do_g_at >= 0 and t == args.do_g_at:
@@ -139,8 +139,20 @@ def main():
             x_t = torch.tensor(obs, dtype=torch.float32, device=args.device).unsqueeze(0)
             p_t = torch.tensor(onehot(last_action, n_actions), dtype=torch.float32, device=args.device).unsqueeze(0)
 
+            err_scalar = torch.tensor(
+                [[float(info.get("fragility", 0.0)) + float(info.get("conflict_load", 0.0))]],
+                dtype=torch.float32,
+                device=args.device,
+            )
+
             with torch.no_grad():
-                action, out = agent.step(x_t, p_t, greedy=args.greedy, ablate_g=args.ablate_g)
+                action, out = agent.step(
+                    x_t,
+                    p_t,
+                    greedy=args.greedy,
+                    ablate_g=args.ablate_g,
+                    err_t=err_scalar,
+                )
 
             a_int = int(action.item())
             obs_next, _, terminated, truncated, info2 = env.step(a_int)
@@ -153,6 +165,13 @@ def main():
             g = out["g"].squeeze(0).detach().cpu().numpy()
             s = out["s"].squeeze(0).detach().cpu().numpy()
             z = out["z"].squeeze(0).detach().cpu().numpy()
+            alpha = float(out["alpha"].mean().detach().cpu().item())
+
+            if g_prev is None:
+                delta_g = 0.0
+            else:
+                delta_g = float(np.linalg.norm(g - g_prev))
+            g_prev = g.copy()
 
             row: Dict[str, Any] = {
                 "episode": int(ep),
@@ -160,50 +179,51 @@ def main():
                 "x": int(info2.get("x", -1)),
                 "y": int(info2.get("y", -1)),
                 "zone_id": int(info2.get("zone_id", -1)),
-
-                "action_env": int(a_int),
+                "on_encounter": int(info2.get("on_encounter", 0)),
+                "encounter_idx": int(info2.get("encounter_idx", -1)),
+                "encounter_profile": str(info2.get("encounter_profile", "none")),
+                "encounter_outcome": int(info2.get("encounter_outcome", 1)),
+                "row_band": str(info2.get("row_band", "balanced")),
+                "row_exposure_mult": float(info2.get("row_exposure_mult", 1.0)),
+                "current_sigma": float(info2.get("current_sigma", np.nan)),
+                "reliability_estimate": float(info2.get("reliability_estimate", 0.0)),
+                "fragility": float(info2.get("fragility", 0.0)),
+                "rupture_memory": float(info2.get("rupture_memory", 0.0)),
+                "conflict_load": float(info2.get("conflict_load", 0.0)),
+                "rupture": int(info2.get("rupture", 0)),
+                "supportive_timer": int(info2.get("supportive_timer", 0)),
+                "misleading_timer": int(info2.get("misleading_timer", 0)),
+                "action": int(a_int),
                 "decision_code": int(decision_code(a_int)),
-                "avoid": int(decision_code(a_int) == 0),
-                "wait": int(decision_code(a_int) == 1),
-                "engage": int(decision_code(a_int) == 2),
-                "sample": int(decision_code(a_int) == 3),
-
-                "pi_entropy": float(entropy),
+                "entropy": float(entropy),
+                "alpha": float(alpha),
+                "delta_g": float(delta_g),
                 "did_do_g": int(did_do_g),
-
-                "on_encounter": int(bool(info2.get("on_encounter", False))),
-                "encounter_event": int(bool(info2.get("encounter_event", False))),
-                "encounter_type": int(info2.get("encounter_type", 1)),
-                "recent_reliability": float(info2.get("recent_reliability", 0.0)),
-                "reliability_mode": int(info2.get("reliability_mode", 1)),
-                "fragility": float(info2.get("fragility", np.nan)),
-                "rupture_memory": float(info2.get("rupture_memory", np.nan)),
-                "conflict_load": float(info2.get("conflict_load", np.nan)),
-                "rupture": int(bool(info2.get("rupture", False))),
-                "pending_ruptures": int(info2.get("pending_ruptures", 0)),
-                "slip": int(bool(info2.get("slip", False))),
-                "drift": int(bool(info2.get("drift", False))),
             }
 
-            for i, v in enumerate(obs.astype(np.float32)):
-                row[f"obs_{i}"] = float(v)
-            for i, v in enumerate(z):
-                row[f"z_{i}"] = float(v)
-            for i, v in enumerate(s):
-                row[f"s_{i}"] = float(v)
+            row["engage"] = 1.0 if a_int == 3 else 0.0
+            row["wait"] = 1.0 if a_int == 4 else 0.0
+            row["withdraw"] = 1.0 if a_int == 2 else 0.0
+            row["sample"] = 1.0 if a_int in (0, 1) else 0.0
+            row["recent_reliability"] = float(info2.get("reliability_estimate", 0.0))
+
             for i, v in enumerate(g):
                 row[f"g_{i}"] = float(v)
+            for i, v in enumerate(s):
+                row[f"s_{i}"] = float(v)
+            for i, v in enumerate(z):
+                row[f"z_{i}"] = float(v)
 
             rows.append(row)
 
             obs = obs_next
+            info = info2
             last_action = a_int
-            done = bool(terminated or truncated)
             t += 1
+            done = bool(terminated or truncated)
 
-    out_path = try_save_table(rows, run_dir / "traj")
-    print(f"Saved trajectories to: {out_path}")
-    print(f"Run dir: {run_dir}")
+    saved = try_save_table(rows, run_dir / "traj")
+    print(f"[collect_phase2] saved: {saved}")
 
 
 if __name__ == "__main__":
