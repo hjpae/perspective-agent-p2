@@ -1,19 +1,15 @@
 # cear_pilot/envs/nzone_common.py
 # -*- coding: utf-8 -*-
 """
-Common perspective-grid environment for both Phase 1 and Phase 2.
+Common grid environment for both Phase 1 and Phase 2.
 
-Design goals from the current project thread:
-- Shared scaffold for Phase 1 and Phase 2: 7 rows x 23 columns.
-- Exteroceptive observation is the 8-neighbor local patch.
-- Reflection padding is used ONLY when constructing the 8-neighbor patch.
-- Phase 1: stronger nonlinear predictability gradient, center start, encounter columns inert.
-- Phase 2: milder linear predictability gradient, left-biased start, encounter columns active.
-- Encounter columns are part of the same predictability field as ordinary columns.
-- For logging / figures, columns are also grouped into 5 reporting zones.
-
-This file is intended to be dropped into the existing repo as a new env module,
-and to coexist with current cear_pilot.envs.nzone_phase1 / nzone_phase2 code.
+- Shared scaffold for Phase 1 and Phase 2: 7 rows x 23 columns by default
+- Exteroceptive observation is the 8-neighbor local patch
+- Reflection padding is used ONLY when constructing the 8-neighbor patch
+- Phase 1: stronger nonlinear predictability gradient, center start, encounter columns inert
+- Phase 2: milder linear predictability gradient, left-biased start, encounter columns active
+- Encounter columns are part of the same predictability field as ordinary columns
+- For logging / figures, columns are also grouped into 5 reporting zones
 """
 
 from __future__ import annotations
@@ -31,25 +27,25 @@ except Exception as e:
 
 
 @dataclass
-class NZonePerspectiveConfig:
+class NZoneCommonConfig:
     # -------------------------
     # shared scaffold
     # -------------------------
-    phase: str = "phase1"              # "phase1" or "phase2"
+    phase: str = "phase1"  # "phase1" or "phase2"
     width: int = 23
     height: int = 7
-    obs_dim: int = 8                    # must stay 8 for 8-neighbor patch
+    obs_dim: int = 8  # must stay 8 for 8-neighbor patch
     max_steps: int = 240
     include_xy: bool = False
-    reward_scale: float = 0.0           # kept at 0.0 by default (reward-free)
+    reward_scale: float = 0.0  # reward-free by default
 
     # global observation field
     zone_mu_scale: float = 0.45
     row_mu_scale: float = 0.10
     use_reflection_padding: bool = True
 
-    # encounter geometry: 1-indexed discussion -> [4, 8, 12, 16, 20]
-    encounter_columns: Tuple[int, ...] = (3, 7, 11, 15, 19)   # 0-based
+    # encounter geometry: [4, 8, 12, 16, 20] in 1-indexed discussion => 0-based below
+    encounter_columns: Tuple[int, ...] = (3, 7, 11, 15, 19)
     encounter_signal: float = 1.00
     encounter_dims: Tuple[int, int] = (0, 1)
 
@@ -63,13 +59,12 @@ class NZonePerspectiveConfig:
     # -------------------------
     # phase 1 shaping
     # -------------------------
-    phase1_start_xy: Tuple[int, int] = (11, 3)   # exact center of 7x23
-    # exact constraints requested by user: left edge 0.60, center column 0.30, right edge 0.03
+    phase1_start_xy: Tuple[int, int] = (11, 3)  # exact center of 7x23
     phase1_sigma_left: float = 0.60
     phase1_sigma_center: float = 0.30
     phase1_sigma_right: float = 0.03
-    phase1_left_power: float = 0.90    # slightly sharper drop on the left
-    phase1_right_power: float = 1.85   # smaller decreases toward far right
+    phase1_left_power: float = 0.90
+    phase1_right_power: float = 1.85
 
     # -------------------------
     # phase 2 assay pressure
@@ -79,7 +74,6 @@ class NZonePerspectiveConfig:
     phase2_sigma_right: float = 0.05
 
     # row-wise stance modulation (applied to sigma in phase2)
-    # cautious (top), balanced (middle), exposed (bottom)
     row_sigma_offsets: Tuple[float, ...] = (-0.03, -0.015, 0.0, 0.0, 0.0, 0.015, 0.03)
     row_exposure_mults: Tuple[float, ...] = (0.60, 0.75, 1.00, 1.00, 1.00, 1.25, 1.40)
 
@@ -119,14 +113,13 @@ class NZonePerspectiveConfig:
     misleading_fragility_boost: float = 0.10
     misleading_rupture_prob: float = 0.30
 
-    # station semantics used only in phase2. The same visible marker is shown everywhere;
-    # this schedule only shapes delayed hidden consequences.
+    # station semantics used only in phase2
     encounter_profiles: Tuple[str, ...] = (
-        "ambiguous",   # col 4
-        "confirm",     # col 8
-        "perturb",     # col 12
-        "accumulate",  # col 16
-        "recovery",    # col 20
+        "ambiguous",
+        "confirm",
+        "perturb",
+        "accumulate",
+        "recovery",
     )
 
     # local patch ordering: NW, N, NE, W, E, SW, S, SE
@@ -137,7 +130,7 @@ class NZonePerspectiveConfig:
     )
 
 
-class NZonePerspectiveEnv(gym.Env):
+class NZoneCommonEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 8}
 
     ACTION_UP = 0
@@ -150,9 +143,9 @@ class NZonePerspectiveEnv(gym.Env):
     OUTCOME_NEUTRAL = 1
     OUTCOME_MISLEADING = 2
 
-    def __init__(self, config: Optional[NZonePerspectiveConfig] = None, render_mode: Optional[str] = None):
+    def __init__(self, config: Optional[NZoneCommonConfig] = None, render_mode: Optional[str] = None):
         super().__init__()
-        self.cfg = config or NZonePerspectiveConfig()
+        self.cfg = config or NZoneCommonConfig()
         self.render_mode = render_mode
 
         if self.cfg.obs_dim != 8:
@@ -172,18 +165,15 @@ class NZonePerspectiveEnv(gym.Env):
 
         self._rng = np.random.default_rng(0)
 
-        # static prototype field (same for both phases)
         self._mu_map = np.zeros((self.H, self.W), dtype=np.float32)
         self._sigma_map = np.zeros((self.H, self.W), dtype=np.float32)
         self._build_static_maps(seed=0)
 
-        # dynamic state
         self.x = 0
         self.y = 0
         self.t = 0
         self.visited: set[Tuple[int, int]] = set()
 
-        # hidden phase-2 state
         self.fragility = float(self.cfg.fragility_init)
         self.rupture_memory = float(self.cfg.rupture_memory_init)
         self.conflict_load = float(self.cfg.conflict_load_init)
@@ -196,9 +186,6 @@ class NZonePerspectiveEnv(gym.Env):
         self._obs_sigma_delta = 0.0
         self._action_slip_delta = 0.0
 
-    # -----------------------------------------------------
-    # static maps / geometry
-    # -----------------------------------------------------
     def _build_static_maps(self, seed: int) -> None:
         self._mu_map = self._build_mu_map(seed)
         self._sigma_map = self._build_sigma_map()
@@ -209,7 +196,6 @@ class NZonePerspectiveEnv(gym.Env):
         row_center = (self.H - 1) / 2.0
         y = (np.arange(self.H, dtype=np.float32) - row_center) / max(1.0, row_center)
 
-        # smooth field: longitudinal component + mild row component + tiny static heterogeneity
         X = np.tile(x[None, :], (self.H, 1))
         Y = np.tile(y[:, None], (1, self.W))
         base = self.cfg.zone_mu_scale * np.tanh(1.6 * X) + self.cfg.row_mu_scale * Y
@@ -223,27 +209,25 @@ class NZonePerspectiveEnv(gym.Env):
             col_sigmas = self._phase2_sigma_vector()
 
         row_offsets = np.array(self.cfg.row_sigma_offsets, dtype=np.float32)
-        M = np.zeros((self.H, self.W), dtype=np.float32)
+        m = np.zeros((self.H, self.W), dtype=np.float32)
         for y in range(self.H):
-            M[y, :] = np.clip(col_sigmas + row_offsets[y], 0.005, None)
-        return M
+            m[y, :] = np.clip(col_sigmas + row_offsets[y], 0.005, None)
+        return m
 
     def _phase1_sigma_vector(self) -> np.ndarray:
-        # exact constraints: left edge=0.60, center col=0.30, right edge=0.03
         left = float(self.cfg.phase1_sigma_left)
         center = float(self.cfg.phase1_sigma_center)
         right = float(self.cfg.phase1_sigma_right)
-        c = self.W // 2  # 11 for width=23
+        c = self.W // 2
 
         sig = np.zeros((self.W,), dtype=np.float32)
-        # left half including center
         for x in range(0, c + 1):
             u = (c - x) / max(1, c)
             sig[x] = center + (left - center) * (u ** float(self.cfg.phase1_left_power))
-        # right half including center
         for x in range(c, self.W):
             u = (x - c) / max(1, self.W - 1 - c)
             sig[x] = center + (right - center) * (u ** float(self.cfg.phase1_right_power))
+
         sig[0] = left
         sig[c] = center
         sig[-1] = right
@@ -258,7 +242,6 @@ class NZonePerspectiveEnv(gym.Env):
         )
 
     def report_zone_id_of_x(self, x: int) -> int:
-        # 5 reporting buckets for figures / summaries only
         x = int(np.clip(x, 0, self.W - 1))
         b0, b1, b2, b3 = [int(v) for v in self.cfg.report_zone_boundaries]
         if x < b0:
@@ -295,9 +278,6 @@ class NZonePerspectiveEnv(gym.Env):
     def row_exposure_mult(self, y: int) -> float:
         return float(self.cfg.row_exposure_mults[int(np.clip(y, 0, self.H - 1))])
 
-    # -----------------------------------------------------
-    # reflection padding for 8-neighbor patch only
-    # -----------------------------------------------------
     def _reflect_index(self, idx: int, size: int) -> int:
         if size <= 1:
             return 0
@@ -314,9 +294,6 @@ class NZonePerspectiveEnv(gym.Env):
             return self._reflect_index(x, self.W), self._reflect_index(y, self.H)
         return int(np.clip(x, 0, self.W - 1)), int(np.clip(y, 0, self.H - 1))
 
-    # -----------------------------------------------------
-    # movement helpers
-    # -----------------------------------------------------
     def _mx(self, x: int) -> int:
         return (self.W - 1 - int(x)) if self.cfg.mirror_x else int(x)
 
@@ -332,21 +309,9 @@ class NZonePerspectiveEnv(gym.Env):
     def _clip_xy(self, x: int, y: int) -> Tuple[int, int]:
         return int(np.clip(x, 0, self.W - 1)), int(np.clip(y, 0, self.H - 1))
 
-    def _reverse_action(self, action: int) -> int:
-        if action == self.ACTION_UP:
-            return self.ACTION_DOWN
-        if action == self.ACTION_DOWN:
-            return self.ACTION_UP
-        if action == self.ACTION_LEFT:
-            return self.ACTION_RIGHT
-        if action == self.ACTION_RIGHT:
-            return self.ACTION_LEFT
-        return self.ACTION_STAY
-
     def _apply_action(self, action: int) -> Tuple[int, int]:
         action = self._swap_lr(int(action))
 
-        # only phase2 has additional slip modulation
         if self.cfg.phase == "phase2" and self.cfg.use_slip:
             p_slip = float(np.clip(self.cfg.base_action_slip + self._action_slip_delta, 0.0, 0.95))
             if self._rng.random() < p_slip:
@@ -361,15 +326,9 @@ class NZonePerspectiveEnv(gym.Env):
             dx = -1
         elif action == self.ACTION_RIGHT:
             dx = +1
-        elif action == self.ACTION_STAY:
-            dx = 0
-            dy = 0
 
         return self._clip_xy(self.x + dx, self.y + dy)
 
-    # -----------------------------------------------------
-    # observation
-    # -----------------------------------------------------
     def _effective_sigma(self, x: int, y: int) -> float:
         s = float(self._sigma_map[int(y), int(x)])
         if self.cfg.phase == "phase2":
@@ -393,17 +352,17 @@ class NZonePerspectiveEnv(gym.Env):
                     vals[int(d)] += float(self.cfg.encounter_signal)
 
         if self.cfg.include_xy:
-            xy = np.array([
-                self._mx(self.x) / max(1, self.W - 1),
-                self.y / max(1, self.H - 1),
-            ], dtype=np.float32)
+            xy = np.array(
+                [
+                    self._mx(self.x) / max(1, self.W - 1),
+                    self.y / max(1, self.H - 1),
+                ],
+                dtype=np.float32,
+            )
             vals = np.concatenate([vals, xy], axis=0)
 
         return vals.astype(np.float32)
 
-    # -----------------------------------------------------
-    # phase2 hidden dynamics
-    # -----------------------------------------------------
     def _decay_hidden_state(self) -> None:
         self.fragility = float(np.clip(self.fragility - self.cfg.fragility_decay, 0.0, 1.0))
         self.rupture_memory = float(np.clip(self.rupture_memory * self.cfg.rupture_memory_decay, 0.0, 1.0))
@@ -427,7 +386,6 @@ class NZonePerspectiveEnv(gym.Env):
     def _sample_encounter_outcome(self, encounter_idx: int, y: int) -> int:
         profile = self._encounter_profile(encounter_idx)
 
-        # Base profile probabilities.
         if profile == "ambiguous":
             p_sup, p_neu, p_mis = 0.25, 0.50, 0.25
         elif profile == "confirm":
@@ -444,7 +402,6 @@ class NZonePerspectiveEnv(gym.Env):
         else:
             p_sup, p_neu, p_mis = 0.30, 0.40, 0.30
 
-        # Small context-sensitive modulation.
         p_sup += 0.10 * max(0.0, self.reliability_estimate)
         p_mis += 0.10 * max(0.0, self.conflict_load)
         z = max(1e-8, p_sup + p_neu + p_mis)
@@ -458,7 +415,9 @@ class NZonePerspectiveEnv(gym.Env):
         return self.OUTCOME_MISLEADING
 
     def _apply_supportive_window(self, exposure: float) -> None:
-        self._supportive_timer = int(self._rng.integers(self.cfg.supportive_window_min, self.cfg.supportive_window_max + 1))
+        self._supportive_timer = int(
+            self._rng.integers(self.cfg.supportive_window_min, self.cfg.supportive_window_max + 1)
+        )
         self._misleading_timer = max(0, self._misleading_timer - 1)
 
         relief = float(self.cfg.supportive_sigma_relief) * float(exposure)
@@ -466,11 +425,15 @@ class NZonePerspectiveEnv(gym.Env):
         self._action_slip_delta = -float(self.cfg.supportive_action_slip_relief) * float(exposure)
 
         self.fragility = float(np.clip(self.fragility - self.cfg.supportive_fragility_relief * exposure, 0.0, 1.0))
-        self.reliability_estimate = float(np.clip(self.reliability_estimate + self.cfg.supportive_reliability_delta * exposure, -1.0, 1.0))
+        self.reliability_estimate = float(
+            np.clip(self.reliability_estimate + self.cfg.supportive_reliability_delta * exposure, -1.0, 1.0)
+        )
         self._last_outcome_code = 0
 
     def _apply_misleading_window(self, exposure: float) -> None:
-        self._misleading_timer = int(self._rng.integers(self.cfg.misleading_window_min, self.cfg.misleading_window_max + 1))
+        self._misleading_timer = int(
+            self._rng.integers(self.cfg.misleading_window_min, self.cfg.misleading_window_max + 1)
+        )
         self._supportive_timer = max(0, self._supportive_timer - 1)
 
         boost = float(self.cfg.misleading_sigma_boost) * float(exposure)
@@ -480,17 +443,22 @@ class NZonePerspectiveEnv(gym.Env):
         self.fragility = float(np.clip(self.fragility + self.cfg.misleading_fragility_boost * exposure, 0.0, 1.0))
         self.rupture_memory = float(np.clip(self.rupture_memory + 0.25 * exposure, 0.0, 1.0))
         self.conflict_load = float(np.clip(self.conflict_load + 0.20 * exposure, 0.0, 1.0))
-        self.reliability_estimate = float(np.clip(self.reliability_estimate + self.cfg.misleading_reliability_delta * exposure, -1.0, 1.0))
+        self.reliability_estimate = float(
+            np.clip(self.reliability_estimate + self.cfg.misleading_reliability_delta * exposure, -1.0, 1.0)
+        )
         self._last_outcome_code = 2
 
-        p_rup = np.clip(self.cfg.misleading_rupture_prob * exposure + 0.25 * self.fragility + 0.15 * self.rupture_memory, 0.0, 1.0)
+        p_rup = np.clip(
+            self.cfg.misleading_rupture_prob * exposure + 0.25 * self.fragility + 0.15 * self.rupture_memory,
+            0.0,
+            1.0,
+        )
         self._rupture_fired_this_step = bool(self._rng.random() < p_rup)
 
     def _apply_neutral_window(self) -> None:
         self._last_outcome_code = 1
 
     def _update_windows(self) -> None:
-        # reset deltas; then re-apply if active timers remain
         self._obs_sigma_delta = 0.0
         self._action_slip_delta = 0.0
         self._rupture_fired_this_step = False
@@ -505,14 +473,15 @@ class NZonePerspectiveEnv(gym.Env):
             self._obs_sigma_delta += float(self.cfg.misleading_obs_sigma_boost)
             self._action_slip_delta += float(self.cfg.misleading_action_slip_boost)
 
-            p_rup = np.clip(0.10 + 0.25 * self.fragility + 0.15 * self.rupture_memory + 0.10 * self.conflict_load, 0.0, 1.0)
+            p_rup = np.clip(
+                0.10 + 0.25 * self.fragility + 0.15 * self.rupture_memory + 0.10 * self.conflict_load,
+                0.0,
+                1.0,
+            )
             self._rupture_fired_this_step = bool(self._rng.random() < p_rup)
 
         self._action_slip_delta = float(np.clip(self._action_slip_delta, -0.20, 0.50))
 
-    # -----------------------------------------------------
-    # Gym API
-    # -----------------------------------------------------
     def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None):
         super().reset(seed=seed)
         if seed is not None:
@@ -539,7 +508,12 @@ class NZonePerspectiveEnv(gym.Env):
         self._action_slip_delta = 0.0
 
         obs = self._observe()
-        info = self._info_dict(on_encounter=False, encounter_idx=-1, encounter_profile="none", encounter_outcome=self.OUTCOME_NEUTRAL)
+        info = self._info_dict(
+            on_encounter=False,
+            encounter_idx=-1,
+            encounter_profile="none",
+            encounter_outcome=self.OUTCOME_NEUTRAL,
+        )
         return obs, info
 
     def _info_dict(
@@ -572,7 +546,6 @@ class NZonePerspectiveEnv(gym.Env):
         }
 
     def step(self, action: int):
-        # ongoing hidden dynamics only matter in phase2
         if self.cfg.phase == "phase2":
             self._decay_hidden_state()
             self._update_windows()
@@ -601,7 +574,7 @@ class NZonePerspectiveEnv(gym.Env):
                 self._apply_neutral_window()
 
         obs = self._observe()
-        reward = float(self.cfg.reward_scale)  # intentionally reward-free unless user changes it
+        reward = float(self.cfg.reward_scale)
         terminated = False
         truncated = bool(self.t >= self.max_steps)
         info = self._info_dict(
@@ -613,14 +586,11 @@ class NZonePerspectiveEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
 
-# -------------------------
-# convenience constructors
-# -------------------------
-def make_phase1_env(**kwargs) -> NZonePerspectiveEnv:
-    cfg = NZonePerspectiveConfig(phase="phase1", use_encounter=False, **kwargs)
-    return NZonePerspectiveEnv(config=cfg)
+def make_phase1_env(**kwargs) -> NZoneCommonEnv:
+    cfg = NZoneCommonConfig(phase="phase1", use_encounter=False, **kwargs)
+    return NZoneCommonEnv(config=cfg)
 
 
-def make_phase2_env(**kwargs) -> NZonePerspectiveEnv:
-    cfg = NZonePerspectiveConfig(phase="phase2", use_encounter=True, **kwargs)
-    return NZonePerspectiveEnv(config=cfg)
+def make_phase2_env(**kwargs) -> NZoneCommonEnv:
+    cfg = NZoneCommonConfig(phase="phase2", use_encounter=True, **kwargs)
+    return NZoneCommonEnv(config=cfg)
