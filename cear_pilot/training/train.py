@@ -1,4 +1,4 @@
-# cear_pilot/training/train_phase1.py
+# cear_pilot/training/train.py
 # -*- coding: utf-8 -*-
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
+from cear_pilot.envs.nzone_grid import NZoneConfig, NZoneGridEnv
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -70,8 +70,8 @@ class EMAMeanVar:
             self.var = 0.0
         else:
             m = self.mean
-            self.mean = self.beta * self.mean + (1.0 - self.beta) * x
-            self.var = self.beta * self.var + (1.0 - self.beta) * (x - m) * (x - m)
+            self.mean = self.beta * self.mean + (1 - self.beta) * x
+            self.var = self.beta * self.var + (1 - self.beta) * (x - m) * (x - m)
         std = float(np.sqrt(max(self.var, 0.0) + self.eps))
         return float(self.mean), std
 
@@ -85,22 +85,6 @@ def save_checkpoint(run_dir: Path, tag: str, agent: CEARAgent, decoder: ObsDecod
     torch.save(ckpt, run_dir / f"ckpt_{tag}.pt")
 
 
-def try_save_table(rows, out_path: Path) -> Path:
-    df = pd.DataFrame(rows)
-    try:
-        p = out_path.with_suffix(".parquet")
-        df.to_parquet(p, index=False)
-        return p
-    except Exception:
-        p = out_path.with_suffix(".csv")
-        df.to_csv(p, index=False)
-        return p
-
-
-def action_name(a: int) -> str:
-    return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
-
-
 def main():
     ap = argparse.ArgumentParser()
 
@@ -112,32 +96,32 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="cpu")
 
-    ap.add_argument("--w_smooth", type=float, default=0.25)
-    ap.add_argument("--w_entropy", type=float, default=0.01)
+    ap.add_argument("--w_smooth", type=float, default=0.05)
+    ap.add_argument("--w_entropy", type=float, default=0.003)
     ap.add_argument("--w_actor", type=float, default=0.5)
     ap.add_argument("--actor_b", type=float, default=0.98)
-    ap.add_argument("--warmup_steps", type=int, default=12000)
+
+    # explicit, short warmup for Phase 2
+    ap.add_argument("--warmup_steps", type=int, default=2000)
 
     # default: keep g across episode boundaries
     ap.add_argument(
         "--reset_g_every_episode",
         action="store_true",
-        help="If set, reset g to zero at every episode boundary. Default is False (carry g).",
+        help="If set, reset g to zero at every episode boundary (old Phase-1 behavior). "
+             "Default is False, i.e. carry g across episodes.",
     )
 
     # -------------------------
-    # phase-1 env base
+    # env base
     # -------------------------
-    ap.add_argument("--width", type=int, default=23)
-    ap.add_argument("--height", type=int, default=7)
+    ap.add_argument("--width", type=int, default=15)
+    ap.add_argument("--height", type=int, default=9)
     ap.add_argument("--obs_dim", type=int, default=8)
     ap.add_argument("--max_steps", type=int, default=240)
 
-    ap.add_argument("--phase1_sigma_left", type=float, default=0.60)
-    ap.add_argument("--phase1_sigma_center", type=float, default=0.30)
-    ap.add_argument("--phase1_sigma_right", type=float, default=0.03)
-    ap.add_argument("--phase1_left_power", type=float, default=0.90)
-    ap.add_argument("--phase1_right_power", type=float, default=1.85)
+    ap.add_argument("--mirror_x", action="store_true")
+    ap.add_argument("--mirror_actions", action="store_true")
 
     # -------------------------
     # logging / saving
@@ -145,27 +129,114 @@ def main():
     ap.add_argument("--log_traj", action="store_true")
     ap.add_argument("--log_every", type=int, default=1)
     ap.add_argument("--save_ckpt_every", type=int, default=12000)
-    ap.add_argument("--print_every", type=int, default=1200)
+
+    # -------------------------
+    # optional live viewer
+    # -------------------------
+    ap.add_argument("--view", action="store_true")
+    ap.add_argument("--view_every", type=int, default=2)
+    ap.add_argument("--view_fps", type=int, default=20)
+    ap.add_argument("--view_cell_px", type=int, default=42)
+
+    # -------------------------
+    # ecology toggles (continuous from the start)
+    # -------------------------
+    ap.add_argument("--use_slip", action="store_true")
+    ap.add_argument("--use_drift", action="store_true")
+    ap.add_argument("--use_volatility", action="store_true")
+    ap.add_argument("--use_hazard", action="store_true")
+    ap.add_argument("--use_encounter", action="store_true")
+
+    ap.add_argument("--p_slip", type=float, nargs=3, default=(0.0, 0.0, 0.0))
+    ap.add_argument("--p_drift", type=float, nargs=3, default=(0.0, 0.0, 0.0))
+    ap.add_argument("--drift_vec", type=int, nargs=6, default=(0, 0, 0, 0, 0, 0))
+
+    ap.add_argument("--volatile_zone", type=int, default=0)
+    ap.add_argument("--volatile_period", type=int, default=40)
+    ap.add_argument("--volatile_strength", type=float, default=0.0)
+
+    ap.add_argument("--hazard_mode", type=str, default="teleport")
+    ap.add_argument("--p_hazard", type=float, nargs=3, default=(0.0, 0.0, 0.0))
+    ap.add_argument("--hazard_teleport_to", type=int, nargs=2, default=(0, 0))
+    ap.add_argument("--hazard_blackout_steps", type=int, default=6)
+
+    # encounter / hidden context
+    ap.add_argument("--encounter_signal", type=float, default=1.25)
+    ap.add_argument("--encounter_delay_min", type=int, default=2)
+    ap.add_argument("--encounter_delay_max", type=int, default=5)
+
+    ap.add_argument("--fragility_init", type=float, default=0.10)
+    ap.add_argument("--fragility_decay", type=float, default=0.00)
+    ap.add_argument("--rupture_memory_init", type=float, default=0.00)
+    ap.add_argument("--rupture_memory_decay", type=float, default=0.95)
+
+    ap.add_argument("--zone_fragility_delta", type=float, nargs=3, default=(0.00, 0.03, 0.08))
+
+    ap.add_argument("--rupture_base_prob", type=float, default=0.55)
+    ap.add_argument("--rupture_fragility_weight", type=float, default=1.20)
+    ap.add_argument("--rupture_memory_weight", type=float, default=0.50)
+
+    ap.add_argument("--rupture_obs_corrupt_steps", type=int, default=8)
+    ap.add_argument("--rupture_obs_sigma", type=float, default=5.0)
+    ap.add_argument("--rupture_action_slip_prob", type=float, default=0.65)
+    ap.add_argument("--rupture_memory_increment", type=float, default=0.50)
+    ap.add_argument("--no_rupture_memory_delta", type=float, default=-0.10)
 
     args = ap.parse_args()
 
     seed_everything(args.seed, deterministic=True)
     device = torch.device(args.device)
 
-    env_cfg = NZoneCommonConfig(
-        phase="phase1",
+    dv = args.drift_vec
+    drift_vec = ((dv[0], dv[1]), (dv[2], dv[3]), (dv[4], dv[5]))
+
+    env_cfg = NZoneConfig(
         width=args.width,
         height=args.height,
         obs_dim=args.obs_dim,
         max_steps=args.max_steps,
-        use_encounter=False,
-        phase1_sigma_left=args.phase1_sigma_left,
-        phase1_sigma_center=args.phase1_sigma_center,
-        phase1_sigma_right=args.phase1_sigma_right,
-        phase1_left_power=args.phase1_left_power,
-        phase1_right_power=args.phase1_right_power,
+        mirror_x=args.mirror_x,
+        mirror_actions=args.mirror_actions,
+
+        use_slip=args.use_slip,
+        use_drift=args.use_drift,
+        use_volatility=args.use_volatility,
+        use_hazard=args.use_hazard,
+        use_encounter=args.use_encounter,
+
+        p_slip=tuple(args.p_slip),
+        p_drift=tuple(args.p_drift),
+        drift_vec=drift_vec,
+
+        volatile_zone=args.volatile_zone,
+        volatile_period=args.volatile_period,
+        volatile_strength=args.volatile_strength,
+
+        hazard_mode=args.hazard_mode,
+        p_hazard=tuple(args.p_hazard),
+        hazard_teleport_to=tuple(args.hazard_teleport_to),
+        hazard_blackout_steps=args.hazard_blackout_steps,
+
+        encounter_signal=args.encounter_signal,
+        encounter_delay_min=args.encounter_delay_min,
+        encounter_delay_max=args.encounter_delay_max,
+
+        fragility_init=args.fragility_init,
+        fragility_decay=args.fragility_decay,
+        rupture_memory_init=args.rupture_memory_init,
+        rupture_memory_decay=args.rupture_memory_decay,
+        zone_fragility_delta=tuple(args.zone_fragility_delta),
+
+        rupture_base_prob=args.rupture_base_prob,
+        rupture_fragility_weight=args.rupture_fragility_weight,
+        rupture_memory_weight=args.rupture_memory_weight,
+        rupture_obs_corrupt_steps=args.rupture_obs_corrupt_steps,
+        rupture_obs_sigma=args.rupture_obs_sigma,
+        rupture_action_slip_prob=args.rupture_action_slip_prob,
+        rupture_memory_increment=args.rupture_memory_increment,
+        no_rupture_memory_delta=args.no_rupture_memory_delta,
     )
-    env = NZoneCommonEnv(config=env_cfg)
+    env = NZoneGridEnv(config=env_cfg)
 
     obs, info = env.reset(seed=args.seed)
     try:
@@ -182,8 +253,6 @@ def main():
 
     agent_cfg.world.z_dim = agent_cfg.encoder.z_dim
     agent_cfg.world.p_dim = agent_cfg.encoder.p_dim
-    agent_cfg.world.update_mode = "fixed"
-    agent_cfg.world.alpha_fixed = agent_cfg.world.g_damping
 
     agent_cfg.state.z_dim = agent_cfg.encoder.z_dim
     agent_cfg.state.p_dim = agent_cfg.encoder.p_dim
@@ -212,7 +281,6 @@ def main():
     warmup_steps = int(max(0, args.warmup_steps))
 
     meta = {
-        "env_type": "phase1_common",
         "seed": args.seed,
         "steps": args.steps,
         "lr": args.lr,
@@ -239,7 +307,18 @@ def main():
     log_rows = []
     log_every = int(max(1, args.log_every))
 
-    # initialize agent once
+    viewer = None
+    if args.view:
+        from cear_pilot.training.pygame_viewer import PygameGridViewer
+        viewer = PygameGridViewer(
+            width=args.width,
+            height=args.height,
+            cell_px=args.view_cell_px,
+            fps=args.view_fps,
+            title="Live Training (SPACE=Pause, Close=Stop)",
+        )
+
+    # initialize agent ONCE
     agent.reset(batch_size=1)
     last_action = 4
     g_prev = agent.get_latents()["g"].detach().clone()
@@ -254,7 +333,11 @@ def main():
     err_stats = EMAMeanVar(beta=0.99)
 
     act_hist = np.zeros(n_actions, dtype=np.int64)
-    zone_hist = np.zeros(5, dtype=np.int64)
+    zone_hist = np.zeros(3, dtype=np.int64)
+    enc_hist = 0
+    rup_hist = 0
+    slip_hist = 0
+    drift_hist = 0
 
     t0 = time.time()
     episode = 0
@@ -265,11 +348,10 @@ def main():
             x_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             p_t = make_proprio_from_last_action(last_action, n_actions, device=device)
 
-            out = agent.forward_step(x_t, p_t, ablate_g=False, err_t=None)
+            out = agent.forward_step(x_t, p_t, ablate_g=False)
             g_t = out["g"]
             s_t = out["s"]
             logits_pred = out["logits"]
-            alpha_t = out["alpha"]
 
             # actor uses detached s
             logits_act = agent.policy(s_t.detach())
@@ -325,13 +407,18 @@ def main():
             obs = obs_next
             last_action = a_int
 
+            # logging counters
+            enc_hist += int(bool(info.get("encounter_event", False)))
+            rup_hist += int(bool(info.get("rupture", False)))
+            slip_hist += int(bool(info.get("slip", False)))
+            drift_hist += int(bool(info.get("drift", False)))
+
             if args.log_traj and ((step % log_every) == 0):
-                z = int(info.get("zone_id", -1))
+                z = info.get("zone_id", -1)
                 with torch.no_grad():
                     g_np = g_t.detach().squeeze(0).float().cpu().numpy()
                     g_norm = float(torch.linalg.vector_norm(g_t).item())
                     ent_val = float(entropy.item())
-                    alpha_val = float(alpha_t.mean().item())
 
                 row = {
                     "t_global": int(step),
@@ -342,23 +429,43 @@ def main():
                     "x": int(info.get("x", -1)),
                     "y": int(info.get("y", -1)),
                     "action": int(a_int),
-                    "action_name": action_name(a_int),
-                    "current_sigma": float(info.get("current_sigma", np.nan)),
                     "entropy": float(ent_val),
                     "g_norm": float(g_norm),
-                    "alpha": float(alpha_val),
-                    "loss": float(loss.item()),
-                    "loss_world": float(loss_world.item()),
                     "loss_pred": float(loss_pred.item()),
                     "loss_smooth": float(loss_smooth.item()),
-                    "loss_actor": float(loss_actor.item()),
-                    "baseline": float(baseline),
-                    "adv": float(adv),
-                    "w_actor_eff": float(w_actor_eff),
+                    "fragility": float(info.get("fragility", np.nan)),
+                    "rupture_memory": float(info.get("rupture_memory", np.nan)),
+                    "on_encounter": int(bool(info.get("on_encounter", False))),
+                    "encounter_event": int(bool(info.get("encounter_event", False))),
+                    "rupture": int(bool(info.get("rupture", False))),
+                    "pending_ruptures": int(info.get("pending_ruptures", 0)),
+                    "blackout_timer": int(info.get("blackout_timer", 0)),
+                    "rupture_obs_timer": int(info.get("rupture_obs_timer", 0)),
+                    "rupture_action_timer": int(info.get("rupture_action_timer", 0)),
+                    "slip": int(bool(info.get("slip", False))),
+                    "drift": int(bool(info.get("drift", False))),
+                    "hazard": int(bool(info.get("hazard", False))),
                 }
                 for i, gv in enumerate(g_np):
                     row[f"g_{i}"] = float(gv)
                 log_rows.append(row)
+
+            if viewer is not None and (step % max(1, args.view_every) == 0):
+                g_norm = float(torch.linalg.vector_norm(g_t.detach()).item())
+                ok = viewer.draw(
+                    env=env,
+                    step=step + 1,
+                    episode=episode,
+                    last_action=last_action,
+                    loss=float(loss.item()),
+                    loss_pred=float(loss_pred.item()),
+                    loss_smooth=float(loss_smooth.item()),
+                    entropy=float(entropy.item()),
+                    g_norm=g_norm,
+                )
+                if ok is False:
+                    print("Viewer closed. Stopping training.")
+                    break
 
             t_in_ep += 1
             if truncated or terminated:
@@ -394,19 +501,17 @@ def main():
 
             act_hist[a_int] += 1
             z = info.get("zone_id", -1)
-            if isinstance(z, (int, np.integer)) and 0 <= int(z) <= 4:
+            if isinstance(z, (int, np.integer)) and 0 <= int(z) <= 2:
                 zone_hist[int(z)] += 1
 
             lw = float(loss_world.item())
             ema_world = lw if ema_world is None else 0.98 * ema_world + 0.02 * lw
 
-            if (step + 1) % args.print_every == 0:
+            if (step + 1) % 2000 == 0:
                 dt = time.time() - t0
                 with torch.no_grad():
                     e_det = per_a_err.detach().float().cpu().numpy()
                     e_min, e_max, e_std = float(e_det.min()), float(e_det.max()), float(e_det.std())
-                    alpha_mean = float(alpha_t.mean().item())
-                    g_norm = float(torch.linalg.vector_norm(g_t.detach()).item())
 
                 act_prob = (act_hist / max(act_hist.sum(), 1)).tolist()
                 zone_prob = (zone_hist / max(zone_hist.sum(), 1)).tolist()
@@ -420,25 +525,40 @@ def main():
                     f"H={float(entropy.item()):.3f} maxpi={float(maxpi_ema):.3f} KL={float(kl_ema):.6f} "
                     f"logits|.|={float(logits_norm_ema):.3f} "
                     f"e[min,max,std]={e_min:.3f},{e_max:.3f},{e_std:.3f} "
-                    f"zone={[round(x, 2) for x in zone_prob]} act={[round(x, 2) for x in act_prob]} "
+                    f"zone={[round(x,2) for x in zone_prob]} act={[round(x,2) for x in act_prob]} "
+                    f"enc_win={enc_hist} rup_win={rup_hist} slip_win={slip_hist} drift_win={drift_hist} "
+                    f"frag={float(info.get('fragility', np.nan)):.2f} "
+                    f"rmem={float(info.get('rupture_memory', np.nan)):.2f} "
                     f"carry_g={int(not args.reset_g_every_episode)} "
-                    f"| adv={float(adv):.4f} w_actor={float(w_actor_eff):.3f} "
-                    f"sigma={float(info.get('current_sigma', np.nan)):.3f} "
-                    f"alpha={alpha_mean:.3f} ||g||={g_norm:.3f} "
                     f"(ep={episode}, {dt:.1f}s)"
                 )
 
                 act_hist[:] = 0
                 zone_hist[:] = 0
+                enc_hist = 0
+                rup_hist = 0
+                slip_hist = 0
+                drift_hist = 0
                 t0 = time.time()
 
             if args.save_ckpt_every > 0 and ((step + 1) % args.save_ckpt_every == 0):
                 save_checkpoint(run_dir, f"step{step+1}", agent, decoder, meta)
 
     finally:
-        if args.log_traj and len(log_rows) > 0:
-            out_path = try_save_table(log_rows, run_dir / "train_traj")
-            print(f"Saved training trajectory to: {out_path}")
+        if viewer is not None:
+            viewer.close()
+
+    if args.log_traj and len(log_rows) > 0:
+        df = pd.DataFrame(log_rows)
+        out_parquet = run_dir / "train_traj.parquet"
+        out_csv = run_dir / "train_traj.csv"
+        try:
+            df.to_parquet(out_parquet, index=False)
+            print(f"Saved training trajectory to: {out_parquet}")
+        except Exception as e:
+            print(f"[WARN] Parquet failed ({type(e).__name__}: {e}). Falling back to CSV.")
+            df.to_csv(out_csv, index=False)
+            print(f"Saved training trajectory to: {out_csv}")
 
     save_checkpoint(run_dir, "final", agent, decoder, meta)
     print(f"Saved final checkpoint to: {run_dir / 'ckpt_final.pt'}")

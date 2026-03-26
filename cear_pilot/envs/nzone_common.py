@@ -50,7 +50,7 @@ class NZoneCommonConfig:
     encounter_dims: Tuple[int, int] = (0, 1)
 
     # reporting buckets only (for figures / summaries)
-    report_zone_boundaries: Tuple[int, ...] = (5, 10, 14, 18)  # => 5 buckets
+    report_zone_boundaries: Tuple[int, ...] = (4, 9, 14, 19)  # => 5 buckets
 
     # movement / embodiment
     mirror_x: bool = False
@@ -70,7 +70,7 @@ class NZoneCommonConfig:
     # phase 2 assay pressure
     # -------------------------
     phase2_start_xy: Tuple[int, int] = (0, 3)
-    phase2_sigma_left: float = 0.50
+    phase2_sigma_left: float = 0.40
     phase2_sigma_right: float = 0.05
 
     # row-wise stance modulation (applied to sigma in phase2)

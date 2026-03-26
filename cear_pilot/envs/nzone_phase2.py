@@ -1,640 +1,189 @@
-# cear_pilot/envs/nzone_phase2.py
+# cear_pilot/envs/nzone_common.py
 # -*- coding: utf-8 -*-
 
 from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, List
-
+from typing import Tuple, Dict, Any
 import numpy as np
-
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-except Exception as e:
-    raise ImportError("This environment requires gymnasium. Install with: pip install gymnasium") from e
+import gymnasium as gym
 
 
 @dataclass
-class NZonePhase2Config:
-    """
-    Phase 2:
-    - 3 zones, 6 columns each => width=18
-    - encounter columns every 3rd column
-    - start at right edge of Z0, center row
-    - weaker sigma gradient than Phase 1
-    - structured reliability blocks:
-        open / mixed / guarded
-    - maturity target:
-        conflict-engagement threshold plasticity x stability
-    """
-    width: int = 18
-    height: int = 9
+class NZoneCommonConfig:
+    # grid
+    width: int = 23
+    height: int = 7
     obs_dim: int = 8
     max_steps: int = 240
 
-    zone_sigma: Tuple[float, float, float] = (0.42, 0.30, 0.20)
-    zone_mu_scale: float = 0.5
-    include_xy: bool = False
+    # encounter control (FORMATION)
+    use_encounter: bool = True
+    encounter_columns: Tuple[int, ...] = (3, 9, 15, 21)
+    encounter_profiles: Tuple[str, ...] = ("misleading", "misleading", "misleading", "misleading")
 
-    encounter_signal: float = 1.20
-    encounter_dims: Tuple[int, int] = (0, 1)
+    # sigma gradient
+    phase2_sigma_left: float = 0.50
+    phase2_sigma_right: float = 0.03
 
-    # milder baseline ecology
-    p_slip: Tuple[float, float, float] = (0.00, 0.03, 0.08)
-    p_drift: Tuple[float, float, float] = (0.00, 0.04, 0.08)
-    drift_vec: Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]] = (
-        (0, 0), (1, 0), (-1, 0)
-    )
-    use_slip: bool = True
-    use_drift: bool = True
-    use_volatility: bool = True
+    # start
+    phase2_start_xy: Tuple[int, int] = (0, 3)
 
-    volatile_zone: int = 2
-    volatile_period: int = 24
-    volatile_strength: float = 0.08
+    # hidden state dynamics (simplified)
+    reliability_init: float = 0.0
+    fragility_init: float = 0.1
+    conflict_load_init: float = 0.0
 
-    # hidden context
-    fragility_init: float = 0.10
-    fragility_decay: float = 0.004
-    rupture_memory_init: float = 0.00
-    rupture_memory_decay: float = 0.96
-    conflict_load_init: float = 0.00
-    conflict_load_decay: float = 0.95
+    reliability_decay: float = 0.01
+    fragility_decay: float = 0.005
+    conflict_decay: float = 0.02
 
-    zone_fragility_delta: Tuple[float, float, float] = (0.00, 0.02, 0.04)
+    # effect magnitudes
+    supportive_delta: float = 0.15
+    misleading_delta: float = -0.18
 
-    # reliability blocks
-    mode_period: int = 96
-    mode_schedule: Tuple[int, ...] = (0, 1, 2, 1)  # open -> mixed -> guarded -> mixed
-    # 0=open, 1=mixed, 2=guarded
+    supportive_fragility_relief: float = 0.04
+    misleading_fragility_boost: float = 0.06
 
-    # rupture mechanics
-    rupture_base_prob: float = 0.24
-    rupture_fragility_weight: float = 0.70
-    rupture_memory_weight: float = 0.28
-    rupture_load_weight: float = 0.22
-    rupture_reliability_relief: float = 0.22
-
-    rupture_obs_corrupt_steps: int = 4
-    rupture_obs_sigma: float = 3.0
-    rupture_action_slip_prob: float = 0.22
-    rupture_memory_increment: float = 0.28
-    conflict_load_increment: float = 0.24
-
-    supportive_reliability_delta: float = 0.22
-    misleading_reliability_delta: float = -0.24
-    neutral_reliability_decay: float = 0.02
-
-    encounter_delay_min: int = 1
-    encounter_delay_max: int = 4
-
-    # NEW: supportive / misleading downstream windows
-    supportive_window_min: int = 4
-    supportive_window_max: int = 8
-    supportive_slip_relief: float = 0.03
-    supportive_drift_relief: float = 0.03
-    supportive_fragility_relief: float = 0.06
-
-    misleading_window_min: int = 3
-    misleading_window_max: int = 7
-    misleading_slip_boost: float = 0.06
-    misleading_drift_boost: float = 0.06
-    misleading_fragility_boost: float = 0.10
-    misleading_extra_rupture_prob: float = 0.35
-
-    mirror_x: bool = False
-    mirror_actions: bool = False
+    supportive_conflict_relief: float = 0.05
+    misleading_conflict_boost: float = 0.07
 
 
-class NZonePhase2Env(gym.Env):
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 8}
+class NZoneCommonEnv(gym.Env):
 
-    ACTION_UP = 0
-    ACTION_DOWN = 1
-    ACTION_LEFT = 2
-    ACTION_RIGHT = 3
-    ACTION_STAY = 4
-
-    MODE_OPEN = 0
-    MODE_MIXED = 1
-    MODE_GUARDED = 2
-
-    OUTCOME_SUPPORTIVE = 0
-    OUTCOME_NEUTRAL = 1
-    OUTCOME_MISLEADING = 2
-
-    def __init__(self, config: Optional[NZonePhase2Config] = None, render_mode: Optional[str] = None):
+    def __init__(self, config: NZoneCommonConfig):
         super().__init__()
-        self.cfg = config or NZonePhase2Config()
-        self.render_mode = render_mode
+        self.cfg = config
 
-        self.W = int(self.cfg.width)
-        self.H = int(self.cfg.height)
-        self.base_obs_dim = int(self.cfg.obs_dim)
-        self.obs_dim = self.base_obs_dim + (2 if self.cfg.include_xy else 0)
-
-        self.action_space = spaces.Discrete(5)
-        high = np.ones((self.obs_dim,), dtype=np.float32) * 10.0
-        self.observation_space = spaces.Box(-high, high, dtype=np.float32)
-
-        self._rng = np.random.default_rng(0)
-
-        self._zone_mu = np.zeros((3, self.base_obs_dim), dtype=np.float32)
-        self._zone_sigma = np.array(self.cfg.zone_sigma, dtype=np.float32)
-
-        self._p_slip_rt = np.array(self.cfg.p_slip, dtype=np.float32)
-        self._p_drift_rt = np.array(self.cfg.p_drift, dtype=np.float32)
-        self._drift_vec_rt = [tuple(v) for v in self.cfg.drift_vec]
-
-        self.x = 0
-        self.y = 0
-        self.t = 0
-
-        self.fragility = float(self.cfg.fragility_init)
-        self.rupture_memory = float(self.cfg.rupture_memory_init)
-        self.conflict_load = float(self.cfg.conflict_load_init)
-
-        self.reliability_estimate = 0.0
-        self.mode = self.MODE_MIXED
-
-        self.pending_ruptures: List[int] = []
-        self._rupture_obs_timer = 0
-        self._rupture_action_timer = 0
-        self._rupture_fired_this_step = False
-
-        self._last_outcome_code = 1
-
-        # NEW: downstream consequence windows
-        self._supportive_timer = 0
-        self._misleading_timer = 0
-
-        self._init_zone_prototypes(seed=0)
-
-    # -------------------------
-    # helpers
-    # -------------------------
-    def _init_zone_prototypes(self, seed: int) -> None:
-        rng = np.random.default_rng(seed)
-        base = rng.normal(0, 1, size=(3, self.base_obs_dim)).astype(np.float32)
-        base = base / (np.linalg.norm(base, axis=1, keepdims=True) + 1e-9)
-        self._zone_mu = base * float(self.cfg.zone_mu_scale)
-
-    def _zone_width(self) -> int:
-        return self.W // 3
-
-    def zone_id_of_x(self, x: int) -> int:
-        zw = self._zone_width()
-        if x < zw:
-            return 0
-        elif x < 2 * zw:
-            return 1
-        return 2
-
-    def zone_id(self) -> int:
-        return self.zone_id_of_x(self.x)
-
-    def _clip_xy(self, x: int, y: int) -> Tuple[int, int]:
-        x = int(np.clip(x, 0, self.W - 1))
-        y = int(np.clip(y, 0, self.H - 1))
-        return x, y
-
-    def _reverse_action(self, action: int) -> int:
-        if action == self.ACTION_UP:
-            return self.ACTION_DOWN
-        if action == self.ACTION_DOWN:
-            return self.ACTION_UP
-        if action == self.ACTION_LEFT:
-            return self.ACTION_RIGHT
-        if action == self.ACTION_RIGHT:
-            return self.ACTION_LEFT
-        return self.ACTION_STAY
-
-    def _encounter_columns(self) -> List[int]:
-        return [i for i in range(self.W) if (i + 1) % 3 == 0]
-
-    def _is_encounter_column(self, x: int) -> bool:
-        return int(x) in self._encounter_columns()
-
-    def _observe(self) -> np.ndarray:
-        zid = self.zone_id()
-        mu = self._zone_mu[zid]
-        sigma = float(self._zone_sigma[zid])
-
-        if self._rupture_obs_timer > 0:
-            sigma = max(sigma, float(self.cfg.rupture_obs_sigma))
-
-        obs = mu + self._rng.normal(0, sigma, size=(self.base_obs_dim,)).astype(np.float32)
-
-        if self._is_encounter_column(self.x):
-            dims = [d for d in self.cfg.encounter_dims if 0 <= int(d) < self.base_obs_dim]
-            for d in dims:
-                obs[int(d)] += float(self.cfg.encounter_signal)
-
-        if self.cfg.include_xy:
-            obs_xy = np.array(
-                [self.x / max(1, self.W - 1), self.y / max(1, self.H - 1)],
-                dtype=np.float32,
-            )
-            obs = np.concatenate([obs, obs_xy], axis=0)
-
-        return obs.astype(np.float32)
-
-    def _current_block_index(self) -> int:
-        return int(self.t // max(1, int(self.cfg.mode_period)))
-
-    def _update_mode_from_schedule(self) -> None:
-        sched = list(self.cfg.mode_schedule)
-        idx = self._current_block_index() % len(sched)
-        self.mode = int(sched[idx])
-
-    def _mode_probs(self) -> Tuple[float, float, float]:
-        # open => supportive-heavy
-        if self.mode == self.MODE_OPEN:
-            return (0.72, 0.18, 0.10)
-        # guarded => misleading-heavy
-        if self.mode == self.MODE_GUARDED:
-            return (0.10, 0.18, 0.72)
-        # mixed => fairly balanced
-        return (0.30, 0.40, 0.30)
-
-    def _sample_encounter_outcome(self) -> int:
-        p_sup, p_neu, p_mis = self._mode_probs()
-
-        # small contextual modulation
-        p_sup = p_sup + 0.10 * max(0.0, self.reliability_estimate)
-        p_mis = p_mis + 0.10 * max(0.0, self.conflict_load)
-        z = p_sup + p_neu + p_mis
-        p_sup, p_neu, p_mis = p_sup / z, p_neu / z, p_mis / z
-
-        r = self._rng.random()
-        if r < p_sup:
-            return self.OUTCOME_SUPPORTIVE
-        if r < p_sup + p_neu:
-            return self.OUTCOME_NEUTRAL
-        return self.OUTCOME_MISLEADING
-
-    def _apply_encounter_outcome(self, outcome: int) -> None:
-        if outcome == self.OUTCOME_SUPPORTIVE:
-            self.reliability_estimate = float(np.clip(
-                self.reliability_estimate + float(self.cfg.supportive_reliability_delta), -1.0, 1.0
-            ))
-            self.conflict_load = float(np.clip(self.conflict_load - 0.10, 0.0, 1.0))
-            self.fragility = float(np.clip(self.fragility - float(self.cfg.supportive_fragility_relief), 0.0, 1.0))
-
-            self._supportive_timer = int(
-                self._rng.integers(self.cfg.supportive_window_min, self.cfg.supportive_window_max + 1)
-            )
-            self._misleading_timer = 0
-            self._last_outcome_code = 0
-
-        elif outcome == self.OUTCOME_MISLEADING:
-            self.reliability_estimate = float(np.clip(
-                self.reliability_estimate + float(self.cfg.misleading_reliability_delta), -1.0, 1.0
-            ))
-            self.conflict_load = float(np.clip(
-                self.conflict_load + float(self.cfg.conflict_load_increment), 0.0, 1.0
-            ))
-            self.fragility = float(np.clip(
-                self.fragility + float(self.cfg.misleading_fragility_boost), 0.0, 1.0
-            ))
-
-            delay = int(self._rng.integers(self.cfg.encounter_delay_min, self.cfg.encounter_delay_max + 1))
-            self.pending_ruptures.append(delay)
-
-            self._misleading_timer = int(
-                self._rng.integers(self.cfg.misleading_window_min, self.cfg.misleading_window_max + 1)
-            )
-            self._supportive_timer = 0
-            self._last_outcome_code = 2
-
-        else:
-            if self.reliability_estimate > 0:
-                self.reliability_estimate = max(0.0, self.reliability_estimate - self.cfg.neutral_reliability_decay)
-            elif self.reliability_estimate < 0:
-                self.reliability_estimate = min(0.0, self.reliability_estimate + self.cfg.neutral_reliability_decay)
-
-            # neutral slowly winds down transient modes
-            self._supportive_timer = max(0, self._supportive_timer - 1)
-            self._misleading_timer = max(0, self._misleading_timer - 1)
-            self._last_outcome_code = 1
-
-    def _advance_pending_ruptures(self) -> None:
-        self._rupture_fired_this_step = False
-        if len(self.pending_ruptures) == 0:
-            return
-
-        new_queue = []
-        for k in self.pending_ruptures:
-            kk = int(k) - 1
-            if kk <= 0:
-                self._evaluate_rupture()
-            else:
-                new_queue.append(kk)
-        self.pending_ruptures = new_queue
-
-    def _evaluate_rupture(self) -> None:
-        p = (
-            float(self.cfg.rupture_base_prob)
-            + float(self.cfg.rupture_fragility_weight) * float(self.fragility)
-            + float(self.cfg.rupture_memory_weight) * float(self.rupture_memory)
-            + float(self.cfg.rupture_load_weight) * float(self.conflict_load)
-            - float(self.cfg.rupture_reliability_relief) * max(0.0, float(self.reliability_estimate))
+        self.action_space = gym.spaces.Discrete(5)
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self.cfg.obs_dim,), dtype=np.float32
         )
 
-        if self._misleading_timer > 0:
-            p += float(self.cfg.misleading_extra_rupture_prob)
+        self.reset()
 
-        p = float(np.clip(p, 0.0, 1.0))
-
-        if self._rng.random() < p:
-            self._rupture_fired_this_step = True
-            self._rupture_obs_timer = int(max(self._rupture_obs_timer, self.cfg.rupture_obs_corrupt_steps))
-            self._rupture_action_timer = int(max(self._rupture_action_timer, self.cfg.rupture_obs_corrupt_steps))
-
-            self.rupture_memory = float(np.clip(
-                self.rupture_memory + float(self.cfg.rupture_memory_increment), 0.0, 1.0
-            ))
-            self.conflict_load = float(np.clip(
-                self.conflict_load + float(self.cfg.conflict_load_increment), 0.0, 1.0
-            ))
-            self.reliability_estimate = float(np.clip(self.reliability_estimate - 0.10, -1.0, 1.0))
-
-    def _update_hidden_context(self, zid: int) -> None:
-        self.fragility += float(self.cfg.zone_fragility_delta[zid])
-        self.fragility -= float(self.cfg.fragility_decay)
-
-        # supportive periods make world slightly easier; misleading periods harder
-        if self._supportive_timer > 0:
-            self.fragility -= 0.02
-        if self._misleading_timer > 0:
-            self.fragility += 0.02
-
-        self.fragility = float(np.clip(self.fragility, 0.0, 1.0))
-
-        self.rupture_memory = float(np.clip(
-            self.rupture_memory * float(self.cfg.rupture_memory_decay), 0.0, 1.0
-        ))
-        self.conflict_load = float(np.clip(
-            self.conflict_load * float(self.cfg.conflict_load_decay), 0.0, 1.0
-        ))
-
-        if self._supportive_timer > 0:
-            self._supportive_timer -= 1
-        if self._misleading_timer > 0:
-            self._misleading_timer -= 1
-
-    def _apply_slip(self, action: int, zid: int) -> Tuple[int, bool]:
-        p = float(np.clip(self._p_slip_rt[zid], 0.0, 1.0))
-
-        if self._supportive_timer > 0:
-            p = max(0.0, p - float(self.cfg.supportive_slip_relief))
-        if self._misleading_timer > 0:
-            p = min(1.0, p + float(self.cfg.misleading_slip_boost))
-
-        if self._rupture_action_timer > 0:
-            p = float(np.clip(p + self.cfg.rupture_action_slip_prob, 0.0, 1.0))
-
-        if self._rng.random() >= p:
-            return action, False
-
-        if self._rng.random() < 0.6:
-            return self.ACTION_STAY, True
-        return self._reverse_action(action), True
-
-    def _apply_drift(self, x: int, y: int, zid: int) -> Tuple[int, int, bool]:
-        p = float(np.clip(self._p_drift_rt[zid], 0.0, 1.0))
-
-        if self._supportive_timer > 0:
-            p = max(0.0, p - float(self.cfg.supportive_drift_relief))
-        if self._misleading_timer > 0:
-            p = min(1.0, p + float(self.cfg.misleading_drift_boost))
-
-        if self._rng.random() >= p:
-            return x, y, False
-
-        dx, dy = self._drift_vec_rt[zid]
-        x2, y2 = self._clip_xy(x + int(dx), y + int(dy))
-        return x2, y2, True
-
-    def _update_volatility(self, zid: int) -> bool:
-        if not self.cfg.use_volatility:
-            return False
-        if zid != int(self.cfg.volatile_zone):
-            return False
-        if self.cfg.volatile_period <= 0:
-            return False
-        if (self.t % int(self.cfg.volatile_period)) != 0:
-            return False
-
-        strength = float(max(0.0, self.cfg.volatile_strength))
-
-        if strength > 0.0:
-            if self.cfg.use_slip:
-                delta = (self._rng.random() * 2.0 - 1.0) * strength
-                self._p_slip_rt[zid] = float(np.clip(self._p_slip_rt[zid] + delta, 0.0, 1.0))
-            if self.cfg.use_drift:
-                delta = (self._rng.random() * 2.0 - 1.0) * strength
-                self._p_drift_rt[zid] = float(np.clip(self._p_drift_rt[zid] + delta, 0.0, 1.0))
-        return True
-
-    # -------------------------
-    # Gym API
-    # -------------------------
-    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None):
+    def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        if seed is not None:
-            self._rng = np.random.default_rng(seed)
-            self._init_zone_prototypes(seed=seed)
 
-        self._p_slip_rt = np.array(self.cfg.p_slip, dtype=np.float32)
-        self._p_drift_rt = np.array(self.cfg.p_drift, dtype=np.float32)
-        self._drift_vec_rt = [tuple(v) for v in self.cfg.drift_vec]
-
-        # start at right edge of Z0, center row
-        self.x = (self.W // 3) - 1  # width=18 => 5
-        self.y = self.H // 2
+        self.x, self.y = self.cfg.phase2_start_xy
         self.t = 0
 
-        self.fragility = float(self.cfg.fragility_init)
-        self.rupture_memory = float(self.cfg.rupture_memory_init)
-        self.conflict_load = float(self.cfg.conflict_load_init)
+        # hidden state
+        self.reliability = self.cfg.reliability_init
+        self.fragility = self.cfg.fragility_init
+        self.conflict_load = self.cfg.conflict_load_init
 
-        self.reliability_estimate = 0.0
-        self.mode = self.MODE_MIXED
+        obs = self._get_obs()
+        info = self._get_info(encounter=False, outcome=1)
 
-        self.pending_ruptures = []
-        self._rupture_obs_timer = 0
-        self._rupture_action_timer = 0
-        self._rupture_fired_this_step = False
-
-        self._last_outcome_code = 1
-        self._supportive_timer = 0
-        self._misleading_timer = 0
-
-        obs = self._observe()
-        info = {
-            "zone_id": self.zone_id(),
-            "x": int(self.x),
-            "y": int(self.y),
-            "t": int(self.t),
-            "on_encounter": bool(self._is_encounter_column(self.x)),
-            "encounter_event": False,
-            "encounter_type": int(self._last_outcome_code),
-            "recent_reliability": float(self.reliability_estimate),
-            "reliability_mode": int(self.mode),
-            "reliability_block": int(self._current_block_index()),
-            "fragility": float(self.fragility),
-            "rupture_memory": float(self.rupture_memory),
-            "conflict_load": float(self.conflict_load),
-            "rupture": False,
-            "pending_ruptures": 0,
-            "slip": False,
-            "drift": False,
-            "hazard": False,
-        }
         return obs, info
 
     def step(self, action: int):
-        action = int(action)
-        old_pos = (self.x, self.y)
-        zid_before = self.zone_id()
-
-        self._update_mode_from_schedule()
-        volatility_event = self._update_volatility(zid_before)
-
-        a_eff, slipped = self._apply_slip(action, zid_before)
-
-        x, y = self.x, self.y
-        if a_eff == self.ACTION_UP:
-            y -= 1
-        elif a_eff == self.ACTION_DOWN:
-            y += 1
-        elif a_eff == self.ACTION_LEFT:
-            x -= 1
-        elif a_eff == self.ACTION_RIGHT:
-            x += 1
-
-        x, y = self._clip_xy(x, y)
-        x, y, drifted = self._apply_drift(x, y, zid_before)
-        self.x, self.y = x, y
-
-        encounter_event = False
-        if self._is_encounter_column(self.x):
-            encounter_event = True
-            outcome = self._sample_encounter_outcome()
-            self._apply_encounter_outcome(outcome)
-
-        self._update_hidden_context(self.zone_id())
-
         self.t += 1
-        self._advance_pending_ruptures()
 
-        if self._rupture_obs_timer > 0:
-            self._rupture_obs_timer -= 1
-        if self._rupture_action_timer > 0:
-            self._rupture_action_timer -= 1
+        # movement
+        if action == 0:   # up
+            self.y = max(0, self.y - 1)
+        elif action == 1: # down
+            self.y = min(self.cfg.height - 1, self.y + 1)
+        elif action == 2: # left
+            self.x = max(0, self.x - 1)
+        elif action == 3: # right
+            self.x = min(self.cfg.width - 1, self.x + 1)
+        elif action == 4: # stay
+            pass
 
-        moved = (self.x, self.y) != old_pos
-        obs = self._observe()
+        # encounter check
+        on_encounter = False
+        encounter_idx = -1
+        encounter_profile = "none"
+        outcome = 1  # 0=supportive, 1=neutral, 2=misleading
 
-        reward = 0.0
+        if self.cfg.use_encounter and self.x in self.cfg.encounter_columns:
+            on_encounter = True
+            encounter_idx = self.cfg.encounter_columns.index(self.x)
+            encounter_profile = self.cfg.encounter_profiles[encounter_idx]
+
+            if encounter_profile == "misleading":
+                outcome = 2
+                self._apply_misleading()
+            elif encounter_profile == "supportive":
+                outcome = 0
+                self._apply_supportive()
+            else:
+                outcome = 1
+
+        # passive decay
+        self._decay_states()
+
+        obs = self._get_obs()
+        info = self._get_info(
+            encounter=on_encounter,
+            outcome=outcome,
+            encounter_idx=encounter_idx,
+            encounter_profile=encounter_profile
+        )
+
         terminated = False
-        truncated = self.t >= int(self.cfg.max_steps)
+        truncated = self.t >= self.cfg.max_steps
 
-        info = {
-            "zone_id": int(self.zone_id()),
-            "x": int(self.x),
-            "y": int(self.y),
-            "t": int(self.t),
-            "a_in": int(action),
-            "a_eff": int(a_eff),
-            "moved": bool(moved),
-            "slip": bool(slipped),
-            "drift": bool(drifted),
-            "hazard": False,
-            "volatility_update": bool(volatility_event),
+        return obs, 0.0, terminated, truncated, info
 
-            "on_encounter": bool(self._is_encounter_column(self.x)),
-            "encounter_event": bool(encounter_event),
-            "encounter_type": int(self._last_outcome_code),  # 0 supportive, 1 neutral, 2 misleading
-            "recent_reliability": float(self.reliability_estimate),
-            "reliability_mode": int(self.mode),
-            "reliability_block": int(self._current_block_index()),
+    def _sigma(self):
+        # linear gradient (left → right)
+        ratio = self.x / (self.cfg.width - 1)
+        return (1 - ratio) * self.cfg.phase2_sigma_left + ratio * self.cfg.phase2_sigma_right
 
+    def _get_obs(self):
+        sigma = self._sigma()
+
+        # simple noisy observation (8-dim)
+        noise = np.random.randn(self.cfg.obs_dim) * sigma
+        return noise.astype(np.float32)
+
+    def _apply_supportive(self):
+        self.reliability += self.cfg.supportive_delta
+        self.fragility -= self.cfg.supportive_fragility_relief
+        self.conflict_load -= self.cfg.supportive_conflict_relief
+
+    def _apply_misleading(self):
+        self.reliability += self.cfg.misleading_delta
+        self.fragility += self.cfg.misleading_fragility_boost
+        self.conflict_load += self.cfg.misleading_conflict_boost
+
+    def _decay_states(self):
+        self.reliability *= (1 - self.cfg.reliability_decay)
+        self.fragility *= (1 - self.cfg.fragility_decay)
+        self.conflict_load *= (1 - self.cfg.conflict_decay)
+
+    def _get_info(
+        self,
+        encounter: bool,
+        outcome: int,
+        encounter_idx: int = -1,
+        encounter_profile: str = "none",
+    ) -> Dict[str, Any]:
+
+        return {
+            "x": self.x,
+            "y": self.y,
+            "zone_id": self._zone_id(),
+
+            "on_encounter": encounter,
+            "encounter_idx": encounter_idx,
+            "encounter_profile": encounter_profile,
+            "encounter_outcome": outcome,
+
+            "reliability_estimate": float(self.reliability),
             "fragility": float(self.fragility),
-            "rupture_memory": float(self.rupture_memory),
             "conflict_load": float(self.conflict_load),
 
-            "supportive_timer": int(self._supportive_timer),
-            "misleading_timer": int(self._misleading_timer),
-
-            "rupture": bool(self._rupture_fired_this_step),
-            "pending_ruptures": int(len(self.pending_ruptures)),
-            "rupture_obs_timer": int(self._rupture_obs_timer),
-            "rupture_action_timer": int(self._rupture_action_timer),
+            "current_sigma": float(self._sigma()),
         }
 
-        return obs, reward, terminated, truncated, info
-
-    # -------------------------
-    # rendering
-    # -------------------------
-    def render(self):
-        if self.render_mode == "rgb_array":
-            return self._render_rgb()
-        self._render_ascii()
-
-    def _render_ascii(self):
-        grid = [["." for _ in range(self.W)] for _ in range(self.H)]
-        for ex in self._encounter_columns():
-            for yy in range(self.H):
-                grid[yy][ex] = "E"
-        grid[self.y][self.x] = "A"
-        print("\n".join("".join(row) for row in grid))
-        print(
-            f"t={self.t} zone={self.zone_id()} pos=({self.x},{self.y}) "
-            f"mode={self.mode} block={self._current_block_index()} rel={self.reliability_estimate:.2f} "
-            f"frag={self.fragility:.2f} rmem={self.rupture_memory:.2f} "
-            f"cload={self.conflict_load:.2f} rup={self._rupture_fired_this_step}"
-        )
-
-    def _render_rgb(self):
-        cell = 24
-        img = np.zeros((self.H * cell, self.W * cell, 3), dtype=np.uint8)
-
-        zone_colors = np.array(
-            [
-                [245, 215, 215],
-                [215, 235, 245],
-                [220, 235, 220],
-            ],
-            dtype=np.uint8,
-        )
-
-        for y in range(self.H):
-            for x in range(self.W):
-                zid = self.zone_id_of_x(x)
-                y0, y1 = y * cell, (y + 1) * cell
-                x0, x1 = x * cell, (x + 1) * cell
-                img[y0:y1, x0:x1] = zone_colors[zid]
-
-        for ex in self._encounter_columns():
-            x0, x1 = ex * cell, (ex + 1) * cell
-            img[:, x0:x1] = np.array([255, 225, 120], dtype=np.uint8)
-
-        y0, y1 = self.y * cell, (self.y + 1) * cell
-        x0, x1 = self.x * cell, (self.x + 1) * cell
-        img[y0:y1, x0:x1] = np.array([0, 0, 0], dtype=np.uint8)
-
-        img[::cell, :, :] = 0
-        img[:, ::cell, :] = 0
-        return img
-
-    def close(self):
-        pass
-
-
-def make_env(**kwargs) -> NZonePhase2Env:
-    cfg = NZonePhase2Config(**kwargs)
-    return NZonePhase2Env(config=cfg)
+    def _zone_id(self):
+        # simple 5 buckets
+        boundaries = [4, 9, 14, 19]
+        for i, b in enumerate(boundaries):
+            if self.x < b:
+                return i
+        return 4

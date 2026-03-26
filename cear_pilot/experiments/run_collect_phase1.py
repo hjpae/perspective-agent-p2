@@ -60,19 +60,19 @@ def build_agent_from_meta(meta: Dict[str, Any], device: str):
     return agent, decoder, env
 
 
+def action_name(a: int) -> str:
+    return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", type=str, required=True)
-    ap.add_argument("--episodes", type=int, default=20)
+    ap.add_argument("--episodes", type=int, default=40)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", type=str, default="cpu")
     ap.add_argument("--greedy", action="store_true")
     ap.add_argument("--outdir", type=str, default="")
     ap.add_argument("--ablate_g", action="store_true")
-
-    ap.add_argument("--do_g_at", type=int, default=-1)
-    ap.add_argument("--do_g_mode", type=str, default="shock", choices=["shock", "swap", "zero"])
-    ap.add_argument("--do_g_scale", type=float, default=1.0)
 
     args = ap.parse_args()
 
@@ -96,9 +96,6 @@ def main():
         "device": str(args.device),
         "greedy": bool(args.greedy),
         "ablate_g": bool(args.ablate_g),
-        "do_g_at": int(args.do_g_at),
-        "do_g_mode": str(args.do_g_mode),
-        "do_g_scale": float(args.do_g_scale),
         "train_meta": meta,
     }
     (run_dir / "meta.json").write_text(json.dumps(run_meta, indent=2))
@@ -117,17 +114,17 @@ def main():
         g_prev = None
 
         while not done:
-            if args.do_g_at >= 0 and t == args.do_g_at:
-                agent.apply_perturbation(kind=args.do_g_mode, scale=args.do_g_scale)
-                did_do_g = 1
-            else:
-                did_do_g = 0
-
             x_t = torch.tensor(obs, dtype=torch.float32, device=args.device).unsqueeze(0)
             p_t = torch.tensor(onehot(last_action, n_actions), dtype=torch.float32, device=args.device).unsqueeze(0)
 
             with torch.no_grad():
-                action, out = agent.step(x_t, p_t, greedy=args.greedy, ablate_g=args.ablate_g, err_t=None)
+                action, out = agent.step(
+                    x_t,
+                    p_t,
+                    greedy=args.greedy,
+                    ablate_g=args.ablate_g,
+                    err_t=None,
+                )
 
             a_int = int(action.item())
             obs_next, _, terminated, truncated, info2 = env.step(a_int)
@@ -136,6 +133,8 @@ def main():
                 logits = out["logits"]
                 pi = torch.softmax(logits, dim=-1)
                 entropy = float((-(pi * torch.log(pi + 1e-9)).sum(dim=-1)).mean().item())
+                action_prob_max = float(pi.max(dim=-1).values.mean().item())
+                policy_mode = int(torch.argmax(pi, dim=-1).item())
 
             g = out["g"].squeeze(0).detach().cpu().numpy()
             alpha = float(out["alpha"].mean().detach().cpu().item())
@@ -156,10 +155,12 @@ def main():
                 "zone_id": int(info2.get("zone_id", -1)),
                 "current_sigma": float(info2.get("current_sigma", np.nan)),
                 "action": int(a_int),
+                "action_name": str(action_name(a_int)),
+                "policy_mode": int(policy_mode),
+                "action_prob_max": float(action_prob_max),
                 "entropy": float(entropy),
                 "alpha": float(alpha),
                 "delta_g": float(delta_g),
-                "did_do_g": int(did_do_g),
             }
 
             for i, v in enumerate(g):
@@ -172,6 +173,7 @@ def main():
             rows.append(row)
 
             obs = obs_next
+            info = info2
             last_action = a_int
             t += 1
             done = bool(terminated or truncated)

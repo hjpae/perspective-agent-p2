@@ -60,10 +60,13 @@ def build_agent_from_meta(meta: Dict[str, Any], device: str):
     return agent, decoder, env
 
 
+def action_name(a: int) -> str:
+    return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
+
+
 def decision_code(action: int) -> int:
-    # coarse stance label for later analysis
     if int(action) == 2:
-        return 0  # withdraw / left
+        return 0  # avoid / left
     if int(action) == 4:
         return 1  # wait
     if int(action) == 3:
@@ -117,7 +120,6 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     n_actions = int(env.action_space.n)
-
     rows: List[Dict[str, Any]] = []
 
     for ep in range(args.episodes):
@@ -161,6 +163,8 @@ def main():
                 logits = out["logits"]
                 pi = torch.softmax(logits, dim=-1)
                 entropy = float((-(pi * torch.log(pi + 1e-9)).sum(dim=-1)).mean().item())
+                action_prob_max = float(pi.max(dim=-1).values.mean().item())
+                policy_mode = int(torch.argmax(pi, dim=-1).item())
 
             g = out["g"].squeeze(0).detach().cpu().numpy()
             s = out["s"].squeeze(0).detach().cpu().numpy()
@@ -179,22 +183,36 @@ def main():
                 "x": int(info2.get("x", -1)),
                 "y": int(info2.get("y", -1)),
                 "zone_id": int(info2.get("zone_id", -1)),
+
                 "on_encounter": int(info2.get("on_encounter", 0)),
+                "encounter_event": int(info2.get("encounter_event", 0)),
                 "encounter_idx": int(info2.get("encounter_idx", -1)),
                 "encounter_profile": str(info2.get("encounter_profile", "none")),
                 "encounter_outcome": int(info2.get("encounter_outcome", 1)),
+
                 "row_band": str(info2.get("row_band", "balanced")),
                 "row_exposure_mult": float(info2.get("row_exposure_mult", 1.0)),
                 "current_sigma": float(info2.get("current_sigma", np.nan)),
+
                 "reliability_estimate": float(info2.get("reliability_estimate", 0.0)),
+                "recent_reliability": float(info2.get("reliability_estimate", 0.0)),
                 "fragility": float(info2.get("fragility", 0.0)),
                 "rupture_memory": float(info2.get("rupture_memory", 0.0)),
                 "conflict_load": float(info2.get("conflict_load", 0.0)),
+
                 "rupture": int(info2.get("rupture", 0)),
+                "pending_ruptures": int(info2.get("pending_ruptures", 0)),
+                "blackout_timer": int(info2.get("blackout_timer", 0)),
+                "rupture_obs_timer": int(info2.get("rupture_obs_timer", 0)),
+                "rupture_action_timer": int(info2.get("rupture_action_timer", 0)),
                 "supportive_timer": int(info2.get("supportive_timer", 0)),
                 "misleading_timer": int(info2.get("misleading_timer", 0)),
+
                 "action": int(a_int),
+                "action_name": str(action_name(a_int)),
                 "decision_code": int(decision_code(a_int)),
+                "policy_mode": int(policy_mode),
+                "action_prob_max": float(action_prob_max),
                 "entropy": float(entropy),
                 "alpha": float(alpha),
                 "delta_g": float(delta_g),
@@ -203,9 +221,8 @@ def main():
 
             row["engage"] = 1.0 if a_int == 3 else 0.0
             row["wait"] = 1.0 if a_int == 4 else 0.0
-            row["withdraw"] = 1.0 if a_int == 2 else 0.0
+            row["avoid"] = 1.0 if a_int == 2 else 0.0
             row["sample"] = 1.0 if a_int in (0, 1) else 0.0
-            row["recent_reliability"] = float(info2.get("reliability_estimate", 0.0))
 
             for i, v in enumerate(g):
                 row[f"g_{i}"] = float(v)

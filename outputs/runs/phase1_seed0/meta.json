@@ -1,16 +1,17 @@
 {
   "env_type": "phase1_common",
   "seed": 0,
-  "steps": 20000,
+  "steps": 48000,
   "lr": 0.0003,
   "device": "cuda",
-  "warmup_steps": 12000,
   "loss_weights": {
     "w_smooth": 0.25,
     "w_entropy": 0.01,
     "w_actor": 0.5
   },
   "actor_b": 0.98,
+  "warmup_steps": 12000,
+  "reset_g_every_episode": false,
   "env_cfg": {
     "phase": "phase1",
     "width": 23,
@@ -35,10 +36,10 @@
       1
     ],
     "report_zone_boundaries": [
-      5,
-      10,
+      4,
+      9,
       14,
-      18
+      19
     ],
     "mirror_x": false,
     "mirror_actions": false,
@@ -55,7 +56,7 @@
       0,
       3
     ],
-    "phase2_sigma_left": 0.5,
+    "phase2_sigma_left": 0.4,
     "phase2_sigma_right": 0.05,
     "row_sigma_offsets": [
       -0.03,
