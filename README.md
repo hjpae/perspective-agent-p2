@@ -39,3 +39,11 @@ print(torch.cuda.is_available())
 if torch.cuda.is_available():  
     print(torch.cuda.get_device_name(0))  
 PY  
+
+
+## Usage  
+
+0. run the smoketest.sh to check compatibility  
+1. run training/train_phase1.py  
+2. based on (1)'s final_ckpt.pt, run experiments/phase2_g_assay  
+3. based on (2)'s ckpt, run analysis/phase2_assay_results.py  
