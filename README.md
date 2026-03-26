@@ -2,7 +2,7 @@
 
 ## Vast.ai instance setup 
 
-git config --global user.name "hnjpae"  
+git config --global user.name "hjpae"  
 git config --global user.email "hnjpae@gmail.com"  
 
 ssh-keygen -t ed25519 -C "hnjpae@gmail.com"  

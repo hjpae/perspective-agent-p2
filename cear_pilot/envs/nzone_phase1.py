@@ -52,6 +52,10 @@ class NZonePhase1Config:
     phase1_left_power: float = 0.90
     phase1_right_power: float = 1.85
 
+    # static world control
+    static_map_seed: int = 0
+    resample_static_maps_on_reset: bool = False
+
     # local patch ordering: NW, N, NE, W, E, SW, S, SE
     patch_order: Tuple[Tuple[int, int], ...] = (
         (-1, -1), (0, -1), (1, -1),
@@ -90,7 +94,10 @@ class NZonePhase1Env(gym.Env):
         self._rng = np.random.default_rng(0)
         self._mu_map = np.zeros((self.H, self.W), dtype=np.float32)
         self._sigma_map = np.zeros((self.H, self.W), dtype=np.float32)
-        self._build_static_maps(seed=0)
+
+        # Build one fixed static world at init.
+        self._static_map_seed = int(self.cfg.static_map_seed)
+        self._build_static_maps(seed=self._static_map_seed)
 
         self.x = 0
         self.y = 0
@@ -138,6 +145,7 @@ class NZonePhase1Env(gym.Env):
         return sig.astype(np.float32)
 
     def _build_sigma_map(self) -> np.ndarray:
+        # column-only sigma, identical across rows
         col_sigmas = self._phase1_sigma_vector()
         m = np.zeros((self.H, self.W), dtype=np.float32)
         for y in range(self.H):
@@ -249,6 +257,8 @@ class NZonePhase1Env(gym.Env):
             "zone_id": int(self.zone_id()),
             "current_sigma": float(self._effective_sigma(self.x, self.y)),
             "reward": float(self.cfg.reward_scale),
+            "static_map_seed": int(self._static_map_seed),
+            "resample_static_maps_on_reset": bool(self.cfg.resample_static_maps_on_reset),
         }
 
     # -------------------------
@@ -256,9 +266,15 @@ class NZonePhase1Env(gym.Env):
     # -------------------------
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
+
+        # Always reset rollout RNG if seed is provided.
         if seed is not None:
             self._rng = np.random.default_rng(seed)
-            self._build_static_maps(seed)
+
+            # Rebuild static maps only when explicitly requested.
+            if bool(self.cfg.resample_static_maps_on_reset):
+                self._static_map_seed = int(seed)
+                self._build_static_maps(seed=int(seed))
 
         self.x, self.y = self.cfg.phase1_start_xy
         self.t = 0

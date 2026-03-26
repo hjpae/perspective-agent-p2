@@ -7,13 +7,13 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 
-from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
+from cear_pilot.envs.nzone_phase2 import NZonePhase2Config, NZonePhase2Env
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -44,22 +44,6 @@ def onehot(idx: int, n: int) -> np.ndarray:
     return v
 
 
-def build_agent_from_meta(meta: Dict[str, Any], device: str):
-    env_cfg = NZoneCommonConfig(**meta["env_cfg"])
-    env = NZoneCommonEnv(config=env_cfg)
-
-    agent_cfg = AgentConfig(device=device)
-    agent_cfg.encoder.__dict__.update(meta["agent_cfg"]["encoder"])
-    agent_cfg.world.__dict__.update(meta["agent_cfg"]["world"])
-    agent_cfg.state.__dict__.update(meta["agent_cfg"]["state"])
-    agent_cfg.policy.__dict__.update(meta["agent_cfg"]["policy"])
-
-    agent = CEARAgent(agent_cfg)
-    dec_cfg = DecoderConfig(**meta["decoder_cfg"])
-    decoder = ObsDecoder(dec_cfg)
-    return agent, decoder, env
-
-
 def action_name(a: int) -> str:
     return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
 
@@ -72,6 +56,39 @@ def decision_code(action: int) -> int:
     if int(action) == 3:
         return 2  # engage / right
     return 3      # vertical shift / sample
+
+
+def build_agent_and_decoder_from_meta(meta: Dict[str, Any], device: str):
+    agent_cfg = AgentConfig(device=device)
+    agent_cfg.encoder.__dict__.update(meta["agent_cfg"]["encoder"])
+    agent_cfg.world.__dict__.update(meta["agent_cfg"]["world"])
+    agent_cfg.state.__dict__.update(meta["agent_cfg"]["state"])
+    agent_cfg.policy.__dict__.update(meta["agent_cfg"]["policy"])
+
+    agent = CEARAgent(agent_cfg)
+
+    dec_cfg = DecoderConfig(**meta["decoder_cfg"])
+    decoder = ObsDecoder(dec_cfg)
+    return agent, decoder, agent_cfg, dec_cfg
+
+
+def build_phase2_err_scalar(info: Dict[str, Any], device: str) -> torch.Tensor:
+    val = float(info.get("fragility", 0.0)) + float(info.get("conflict_load", 0.0))
+    return torch.tensor([[val]], dtype=torch.float32, device=device)
+
+
+def collect_obs_prediction_error(
+    decoder: ObsDecoder,
+    g_t: torch.Tensor,
+    x_next: np.ndarray,
+    device: str,
+) -> Tuple[float, float, float]:
+    with torch.no_grad():
+        x_next_t = torch.tensor(x_next, dtype=torch.float32, device=device).unsqueeze(0)
+        xhat_all = decoder.predict_all_actions(g_t)
+        per_a_err = torch.mean((xhat_all - x_next_t.unsqueeze(1)) ** 2, dim=-1).squeeze(0)
+        e_np = per_a_err.detach().float().cpu().numpy()
+    return float(e_np.min()), float(e_np.max()), float(e_np.std())
 
 
 def main():
@@ -88,12 +105,16 @@ def main():
     ap.add_argument("--do_g_mode", type=str, default="shock", choices=["shock", "swap", "zero"])
     ap.add_argument("--do_g_scale", type=float, default=1.0)
 
+    ap.add_argument("--carry_g_between_episodes", action="store_true")
     args = ap.parse_args()
 
     ckpt = torch.load(args.ckpt, map_location=args.device)
     meta = ckpt["meta"]
 
-    agent, decoder, env = build_agent_from_meta(meta, device=args.device)
+    env_cfg = NZonePhase2Config(**meta["env_cfg"])
+    env = NZonePhase2Env(config=env_cfg)
+
+    agent, decoder, agent_cfg, dec_cfg = build_agent_and_decoder_from_meta(meta, device=args.device)
     agent.load_state_dict(ckpt["agent_state"])
     decoder.load_state_dict(ckpt["decoder_state"])
     agent.to(args.device).eval()
@@ -101,7 +122,6 @@ def main():
 
     run_dir = Path(args.outdir) if args.outdir else (Path("outputs") / "runs" / timestamp_id())
     ensure_dir(run_dir)
-    ensure_dir(run_dir / "figs")
 
     run_meta = {
         "mode": "collect_phase2",
@@ -114,19 +134,27 @@ def main():
         "do_g_at": int(args.do_g_at),
         "do_g_mode": str(args.do_g_mode),
         "do_g_scale": float(args.do_g_scale),
+        "carry_g_between_episodes": bool(args.carry_g_between_episodes),
+        "env_cfg": meta["env_cfg"],
+        "agent_cfg": meta["agent_cfg"],
+        "decoder_cfg": meta["decoder_cfg"],
         "train_meta": meta,
     }
     (run_dir / "meta.json").write_text(json.dumps(run_meta, indent=2))
 
-    rng = np.random.default_rng(args.seed)
     n_actions = int(env.action_space.n)
     rows: List[Dict[str, Any]] = []
 
-    for ep in range(args.episodes):
-        obs, info = env.reset(seed=int(rng.integers(0, 1_000_000)))
-        agent.reset(batch_size=1)
-        last_action = 4
+    agent.reset(batch_size=1)
 
+    for ep in range(args.episodes):
+        ep_seed = int(args.seed + ep)
+        obs, info = env.reset(seed=ep_seed)
+
+        if not args.carry_g_between_episodes:
+            agent.reset(batch_size=1)
+
+        last_action = 4
         done = False
         t = 0
         g_prev = None
@@ -140,12 +168,7 @@ def main():
 
             x_t = torch.tensor(obs, dtype=torch.float32, device=args.device).unsqueeze(0)
             p_t = torch.tensor(onehot(last_action, n_actions), dtype=torch.float32, device=args.device).unsqueeze(0)
-
-            err_scalar = torch.tensor(
-                [[float(info.get("fragility", 0.0)) + float(info.get("conflict_load", 0.0))]],
-                dtype=torch.float32,
-                device=args.device,
-            )
+            err_scalar = build_phase2_err_scalar(info, device=args.device)
 
             with torch.no_grad():
                 action, out = agent.step(
@@ -165,11 +188,11 @@ def main():
                 entropy = float((-(pi * torch.log(pi + 1e-9)).sum(dim=-1)).mean().item())
                 action_prob_max = float(pi.max(dim=-1).values.mean().item())
                 policy_mode = int(torch.argmax(pi, dim=-1).item())
+                alpha = float(out["alpha"].mean().detach().cpu().item())
 
             g = out["g"].squeeze(0).detach().cpu().numpy()
             s = out["s"].squeeze(0).detach().cpu().numpy()
             z = out["z"].squeeze(0).detach().cpu().numpy()
-            alpha = float(out["alpha"].mean().detach().cpu().item())
 
             if g_prev is None:
                 delta_g = 0.0
@@ -177,8 +200,17 @@ def main():
                 delta_g = float(np.linalg.norm(g - g_prev))
             g_prev = g.copy()
 
+            e_min, e_max, e_std = collect_obs_prediction_error(
+                decoder=decoder,
+                g_t=out["g"],
+                x_next=obs_next,
+                device=args.device,
+            )
+
             row: Dict[str, Any] = {
                 "episode": int(ep),
+                "episode_seed": int(ep_seed),
+                "phase": "phase2",
                 "t": int(info2.get("t", t)),
                 "x": int(info2.get("x", -1)),
                 "y": int(info2.get("y", -1)),
@@ -217,6 +249,9 @@ def main():
                 "alpha": float(alpha),
                 "delta_g": float(delta_g),
                 "did_do_g": int(did_do_g),
+                "pred_err_min": float(e_min),
+                "pred_err_max": float(e_max),
+                "pred_err_std": float(e_std),
             }
 
             row["engage"] = 1.0 if a_int == 3 else 0.0

@@ -7,13 +7,13 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 
-from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
+from cear_pilot.envs.nzone_phase1 import NZonePhase1Config, NZonePhase1Env
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -44,10 +44,11 @@ def onehot(idx: int, n: int) -> np.ndarray:
     return v
 
 
-def build_agent_from_meta(meta: Dict[str, Any], device: str):
-    env_cfg = NZoneCommonConfig(**meta["env_cfg"])
-    env = NZoneCommonEnv(config=env_cfg)
+def action_name(a: int) -> str:
+    return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
 
+
+def build_agent_and_decoder_from_meta(meta: Dict[str, Any], device: str):
     agent_cfg = AgentConfig(device=device)
     agent_cfg.encoder.__dict__.update(meta["agent_cfg"]["encoder"])
     agent_cfg.world.__dict__.update(meta["agent_cfg"]["world"])
@@ -55,13 +56,24 @@ def build_agent_from_meta(meta: Dict[str, Any], device: str):
     agent_cfg.policy.__dict__.update(meta["agent_cfg"]["policy"])
 
     agent = CEARAgent(agent_cfg)
+
     dec_cfg = DecoderConfig(**meta["decoder_cfg"])
     decoder = ObsDecoder(dec_cfg)
-    return agent, decoder, env
+    return agent, decoder, agent_cfg, dec_cfg
 
 
-def action_name(a: int) -> str:
-    return ["UP", "DOWN", "LEFT", "RIGHT", "STAY"][int(a)]
+def collect_obs_prediction_error(
+    decoder: ObsDecoder,
+    g_t: torch.Tensor,
+    x_next: np.ndarray,
+    device: str,
+) -> Tuple[float, float, float]:
+    with torch.no_grad():
+        x_next_t = torch.tensor(x_next, dtype=torch.float32, device=device).unsqueeze(0)
+        xhat_all = decoder.predict_all_actions(g_t)
+        per_a_err = torch.mean((xhat_all - x_next_t.unsqueeze(1)) ** 2, dim=-1).squeeze(0)
+        e_np = per_a_err.detach().float().cpu().numpy()
+    return float(e_np.min()), float(e_np.max()), float(e_np.std())
 
 
 def main():
@@ -73,13 +85,15 @@ def main():
     ap.add_argument("--greedy", action="store_true")
     ap.add_argument("--outdir", type=str, default="")
     ap.add_argument("--ablate_g", action="store_true")
-
     args = ap.parse_args()
 
     ckpt = torch.load(args.ckpt, map_location=args.device)
     meta = ckpt["meta"]
 
-    agent, decoder, env = build_agent_from_meta(meta, device=args.device)
+    env_cfg = NZonePhase1Config(**meta["env_cfg"])
+    env = NZonePhase1Env(config=env_cfg)
+
+    agent, decoder, agent_cfg, dec_cfg = build_agent_and_decoder_from_meta(meta, device=args.device)
     agent.load_state_dict(ckpt["agent_state"])
     decoder.load_state_dict(ckpt["decoder_state"])
     agent.to(args.device).eval()
@@ -96,19 +110,22 @@ def main():
         "device": str(args.device),
         "greedy": bool(args.greedy),
         "ablate_g": bool(args.ablate_g),
+        "env_cfg": meta["env_cfg"],
+        "agent_cfg": meta["agent_cfg"],
+        "decoder_cfg": meta["decoder_cfg"],
         "train_meta": meta,
     }
     (run_dir / "meta.json").write_text(json.dumps(run_meta, indent=2))
 
-    rng = np.random.default_rng(args.seed)
     n_actions = int(env.action_space.n)
     rows: List[Dict[str, Any]] = []
 
     for ep in range(args.episodes):
-        obs, info = env.reset(seed=int(rng.integers(0, 1_000_000)))
+        ep_seed = int(args.seed + ep)
+        obs, info = env.reset(seed=ep_seed)
+
         agent.reset(batch_size=1)
         last_action = 4
-
         done = False
         t = 0
         g_prev = None
@@ -135,9 +152,9 @@ def main():
                 entropy = float((-(pi * torch.log(pi + 1e-9)).sum(dim=-1)).mean().item())
                 action_prob_max = float(pi.max(dim=-1).values.mean().item())
                 policy_mode = int(torch.argmax(pi, dim=-1).item())
+                alpha = float(out["alpha"].mean().detach().cpu().item())
 
             g = out["g"].squeeze(0).detach().cpu().numpy()
-            alpha = float(out["alpha"].mean().detach().cpu().item())
             s = out["s"].squeeze(0).detach().cpu().numpy()
             z = out["z"].squeeze(0).detach().cpu().numpy()
 
@@ -147,8 +164,17 @@ def main():
                 delta_g = float(np.linalg.norm(g - g_prev))
             g_prev = g.copy()
 
+            e_min, e_max, e_std = collect_obs_prediction_error(
+                decoder=decoder,
+                g_t=out["g"],
+                x_next=obs_next,
+                device=args.device,
+            )
+
             row: Dict[str, Any] = {
                 "episode": int(ep),
+                "episode_seed": int(ep_seed),
+                "phase": "phase1",
                 "t": int(info2.get("t", t)),
                 "x": int(info2.get("x", -1)),
                 "y": int(info2.get("y", -1)),
@@ -161,6 +187,9 @@ def main():
                 "entropy": float(entropy),
                 "alpha": float(alpha),
                 "delta_g": float(delta_g),
+                "pred_err_min": float(e_min),
+                "pred_err_max": float(e_max),
+                "pred_err_std": float(e_std),
             }
 
             for i, v in enumerate(g):
@@ -173,7 +202,6 @@ def main():
             rows.append(row)
 
             obs = obs_next
-            info = info2
             last_action = a_int
             t += 1
             done = bool(terminated or truncated)
