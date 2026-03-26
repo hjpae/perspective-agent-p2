@@ -17,7 +17,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
+from cear_pilot.envs.nzone_phase1 import NZonePhase1Config, NZonePhase1Env
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -152,20 +152,18 @@ def main():
     seed_everything(args.seed, deterministic=True)
     device = torch.device(args.device)
 
-    env_cfg = NZoneCommonConfig(
-        phase="phase1",
+    env_cfg = NZonePhase1Config(
         width=args.width,
         height=args.height,
         obs_dim=args.obs_dim,
         max_steps=args.max_steps,
-        use_encounter=False,
         phase1_sigma_left=args.phase1_sigma_left,
         phase1_sigma_center=args.phase1_sigma_center,
         phase1_sigma_right=args.phase1_sigma_right,
         phase1_left_power=args.phase1_left_power,
         phase1_right_power=args.phase1_right_power,
     )
-    env = NZoneCommonEnv(config=env_cfg)
+    env = NZonePhase1Env(config=env_cfg)
 
     obs, info = env.reset(seed=args.seed)
     try:

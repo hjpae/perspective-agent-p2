@@ -17,7 +17,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from cear_pilot.envs.nzone_common import NZoneCommonConfig, NZoneCommonEnv
+from cear_pilot.envs.nzone_phase2 import NZonePhase2Config, NZonePhase2Env
 from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
@@ -293,7 +293,7 @@ def main():
     # - no slip / drift-like confounds
     # - no extra observation corruption boosts
     # - no rupture spike confound
-    env_cfg = NZoneCommonConfig(
+    env_cfg = NZonePhase2Config(
         phase="phase2",
         width=args.width,
         height=args.height,
@@ -326,7 +326,7 @@ def main():
         # Keep hidden-state dynamics, but make them cleaner.
         misleading_rupture_prob=0.0,
     )
-    env = NZoneCommonEnv(config=env_cfg)
+    env = NZonePhase2Config(config=env_cfg)
 
     obs, info = env.reset(seed=args.seed)
     try:
