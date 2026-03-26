@@ -105,16 +105,13 @@ def resolve_formation_profile(profile_name: str) -> tuple[bool, Tuple[int, ...],
     """
     Returns:
         use_encounter, encounter_columns, encounter_profiles
-
-    Assumes the env rewrite will interpret encounter_profiles literally as:
-        "misleading" or "supportive".
     """
     profile_name = str(profile_name).strip().lower()
 
     if profile_name == "no_encounter":
         return False, tuple(), tuple()
 
-    # Symmetric timing baselines
+    # symmetric timing baselines
     even_cols = (3, 9, 15, 21)
     early_cols = (3, 6, 9, 12)
     late_cols = (12, 15, 18, 21)
@@ -158,7 +155,7 @@ def load_phase1_checkpoint(
     if obs_dim_override is not None:
         agent_cfg.encoder.obs_dim = int(obs_dim_override)
 
-    # Phase 2 changes only update-law, while carrying the phase-1 backbone.
+    # phase 2 changes only update-law while carrying the phase-1 backbone
     agent_cfg.world.update_mode = str(update_mode)
     agent_cfg.world.alpha_fixed = float(alpha_fixed)
     agent_cfg.world.alpha_min = float(alpha_min)
@@ -179,12 +176,6 @@ def load_phase1_checkpoint(
 def build_evidence_pressure(pred_now: float, info: Dict) -> float:
     """
     Formation-stage evidence pressure.
-
-    Keep this simple:
-    - immediate prediction mismatch
-    - encounter valence pressure
-    - reliability / fragility / conflict / rupture-memory
-    - rupture event
     """
     on_enc = float(info.get("on_encounter", 0))
     rupture = float(info.get("rupture", 0))
@@ -266,6 +257,7 @@ def main():
     ap.add_argument("--obs_dim", type=int, default=8)
     ap.add_argument("--max_steps", type=int, default=240)
 
+    # keep CLI names for convenience; map them to NZonePhase2Config.sigma_left/right
     ap.add_argument("--phase2_sigma_left", type=float, default=0.50)
     ap.add_argument("--phase2_sigma_right", type=float, default=0.03)
 
@@ -288,45 +280,18 @@ def main():
 
     use_encounter, encounter_columns, encounter_profiles = resolve_formation_profile(args.formation_profile)
 
-    # Formation-stage env:
-    # - no row stance manipulation
-    # - no slip / drift-like confounds
-    # - no extra observation corruption boosts
-    # - no rupture spike confound
     env_cfg = NZonePhase2Config(
-        phase="phase2",
         width=args.width,
         height=args.height,
         obs_dim=args.obs_dim,
         max_steps=args.max_steps,
-
         use_encounter=bool(use_encounter),
         encounter_columns=tuple(encounter_columns),
-        encounter_profiles=tuple(encounter_profiles) if len(encounter_profiles) > 0 else (
-            "ambiguous", "confirm", "perturb", "accumulate", "recovery"
-        ),
-
-        phase2_sigma_left=args.phase2_sigma_left,
-        phase2_sigma_right=args.phase2_sigma_right,
-
-        # Remove row-specific formation bias.
-        row_sigma_offsets=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        row_exposure_mults=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
-
-        # Turn off mild ecology confounds for formation-stage clarity.
-        use_slip=False,
-        base_action_slip=0.0,
-        misleading_action_slip_boost=0.0,
-        supportive_action_slip_relief=0.0,
-
-        use_obs_corruption=False,
-        misleading_obs_sigma_boost=0.0,
-        supportive_obs_sigma_relief=0.0,
-
-        # Keep hidden-state dynamics, but make them cleaner.
-        misleading_rupture_prob=0.0,
+        encounter_profiles=tuple(encounter_profiles),
+        sigma_left=args.phase2_sigma_left,
+        sigma_right=args.phase2_sigma_right,
     )
-    env = NZonePhase2Config(config=env_cfg)
+    env = NZonePhase2Env(config=env_cfg)
 
     obs, info = env.reset(seed=args.seed)
     try:
@@ -347,8 +312,7 @@ def main():
     agent.to(device)
     decoder.to(device)
 
-    # Freeze the entire backbone.
-    # Only alpha_net is trainable.
+    # freeze backbone completely; only alpha_net is trainable
     freeze_module(agent)
     freeze_module(decoder)
     unfreeze_module(agent.world.alpha_net)
@@ -452,28 +416,28 @@ def main():
 
             out = agent.forward_step(x_t, p_t, ablate_g=False, err_t=prev_err_t)
             g_t = out["g"]
+            s_t = out["s"]
             logits_act = out["logits"]
             alpha_t = out["alpha"]
             g_candidate = out["g_candidate"]
-            s_t = out["s"]
 
             pi_act = torch.softmax(logits_act, dim=-1)
 
-            # Frozen backbone policy: sampling only.
+            # frozen policy backbone: sampling only
             a_t = agent.policy.sample_action(logits_act, greedy=False)
             a_int = int(a_t.item())
 
             obs_next, _, terminated, truncated, info2 = env.step(a_int)
             x_next = torch.tensor(obs_next, dtype=torch.float32, device=device).unsqueeze(0)
 
-            # Frozen decoder, but gradient still flows back to g -> alpha_net.
+            # frozen decoder, but gradient must flow to g -> alpha_net
             xhat_all = decoder.predict_all_actions(g_t)
             xhat_exp = torch.sum(pi_act.unsqueeze(-1) * xhat_all, dim=1)
 
             loss_pred = F.mse_loss(xhat_exp, x_next)
             loss_smooth = torch.mean((g_t - g_prev) ** 2)
-
             entropy = -(pi_act * torch.log(pi_act + 1e-9)).sum(dim=-1).mean()
+
             loss = loss_pred + args.w_smooth * loss_smooth - args.w_entropy * entropy
 
             per_a_err = torch.mean((xhat_all - x_next.unsqueeze(1)) ** 2, dim=-1).squeeze(0)
@@ -510,9 +474,8 @@ def main():
                 kl_ema = kl if (kl_ema is None) else (0.98 * kl_ema + 0.02 * kl)
                 logits_norm_ema = ln if (logits_norm_ema is None) else (0.98 * logits_norm_ema + 0.02 * ln)
 
-                ema_alpha = float(alpha_t.mean().item()) if (ema_alpha is None) else (
-                    0.98 * ema_alpha + 0.02 * float(alpha_t.mean().item())
-                )
+                alpha_mean = float(alpha_t.mean().item())
+                ema_alpha = alpha_mean if (ema_alpha is None) else (0.98 * ema_alpha + 0.02 * alpha_mean)
                 ema_evidence = err_value if (ema_evidence is None) else (0.98 * ema_evidence + 0.02 * err_value)
                 ema_delta_g = delta_g if (ema_delta_g is None) else (0.98 * ema_delta_g + 0.02 * delta_g)
 
@@ -527,7 +490,7 @@ def main():
             if isinstance(z, (int, np.integer)) and 0 <= int(z) <= 4:
                 zone_hist[int(z)] += 1
 
-            # Count actual encounter occupancy, not event pulses.
+            # count actual encounter occupancy, not rare event pulses
             enc_hist += int(bool(info2.get("on_encounter", False)))
 
             outcome = int(info2.get("encounter_outcome", 1))
@@ -662,7 +625,6 @@ def main():
                 if args.reset_g_every_episode:
                     agent.reset(batch_size=1)
 
-                # Carry g by default across episodes.
                 g_prev = agent.get_latents()["g"].detach().clone()
                 prev_err_t = torch.zeros((1, 1), dtype=torch.float32, device=device)
 
