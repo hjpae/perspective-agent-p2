@@ -1,0 +1,20 @@
+{
+  "run_dir": "outputs/runs/phase2_train_ssss_alpha5_20260326_235531",
+  "alpha_fixed": 0.5,
+  "episodes": 100,
+  "schedule_pattern": "1-1-1-1",
+  "valence_sequence": "SSSS",
+  "carry_g_between_episodes": true,
+  "g_end_norm_first": 3.0779058933258057,
+  "g_end_norm_last": 3.081763744354248,
+  "g_delta_from_global_init_last": 3.081763744354248,
+  "g_delta_from_prev_ep_end_last": 0.11755453795194626,
+  "mean_within_ep_delta": 0.07449309199117124,
+  "mean_stepwise_delta": 0.025774535199027743,
+  "selected_dims": [
+    8,
+    0,
+    6,
+    7
+  ]
+}

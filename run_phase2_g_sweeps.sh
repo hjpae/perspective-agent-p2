@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CKPT="${1:-outputs/runs/p1_s0/ckpt_final.pt}"
-DEVICE="${DEVICE:-cpu}"
+DEVICE="${DEVICE:-cuda}"
 EPISODES="${EPISODES:-100}"
 PRINT_EVERY_STEPS="${PRINT_EVERY_STEPS:-1000}"
 SEED="${SEED:-0}"

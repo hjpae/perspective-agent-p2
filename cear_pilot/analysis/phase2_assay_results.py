@@ -24,7 +24,7 @@ RUN_PREFIX = "phase2_g_sweeps_"
 SWEEP_DIR = None
 
 SAVE_FIGS = True
-FIG_OUT = Path("outputs/figures_phase2_smoketest")
+FIG_OUT = Path("outputs/figures_phase2")
 FIG_OUT.mkdir(parents=True, exist_ok=True)
 
 
