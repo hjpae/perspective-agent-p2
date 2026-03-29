@@ -114,7 +114,103 @@ def resolve_env_from_phase1_meta(meta: Dict[str, Any], args: argparse.Namespace)
     env_cfg.misleading_impulse = float(args.misleading_impulse)
     env_cfg.distortion_scale = float(args.distortion_scale)
     env_cfg.event_delay_steps = int(args.event_delay_steps)
+    env_cfg.schedule_jitter_std = float(args.schedule_jitter_std)
+    env_cfg.min_event_gap = int(args.min_event_gap)
+    env_cfg.event_marker_signal = float(args.event_marker_signal)
+    env_cfg.use_event_marker = bool(not args.disable_event_marker)
     return env_cfg
+
+
+def safe_info_float(info: Dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        return float(info.get(key, default))
+    except Exception:
+        return float(default)
+
+
+def safe_info_int(info: Dict[str, Any], key: str, default: int = 0) -> int:
+    try:
+        return int(info.get(key, default))
+    except Exception:
+        return int(default)
+
+
+def safe_info_str(info: Dict[str, Any], key: str, default: str = "none") -> str:
+    try:
+        v = str(info.get(key, default))
+        return v
+    except Exception:
+        return str(default)
+
+
+def exp_trace_from_steps(steps: int, tau: float) -> float:
+    if steps is None or steps < 0:
+        return 0.0
+    return float(np.exp(-float(steps) / max(float(tau), 1e-6)))
+
+
+def valence_to_flags(valence: str) -> tuple[float, float]:
+    v = str(valence).strip().lower()
+    if v == "supportive":
+        return 1.0, 0.0
+    if v == "misleading":
+        return 0.0, 1.0
+    return 0.0, 0.0
+
+
+def build_err_t(
+    prev_pred_err: torch.Tensor,
+    err_ema_short: torch.Tensor,
+    err_ema_long: torch.Tensor,
+    info: Dict[str, Any],
+    device: torch.device,
+) -> torch.Tensor:
+    eps = 1e-3
+    long_base = torch.clamp(err_ema_long, min=eps)
+
+    pred_err_now_ratio = torch.log1p(prev_pred_err / long_base)
+    pred_err_ema_short_ratio = torch.log1p(err_ema_short / long_base)
+    pred_err_ema_long_log = torch.log1p(err_ema_long)
+    pred_err_rise_ratio = torch.tanh((err_ema_short - err_ema_long) / (long_base + eps))
+
+    steps_since_event = safe_info_int(info, "steps_since_last_event", -1)
+    steps_since_consequence = safe_info_int(info, "steps_since_last_consequence", -1)
+
+    recent_event_trace = exp_trace_from_steps(steps_since_event, tau=4.0)
+    recent_consequence_trace = exp_trace_from_steps(steps_since_consequence, tau=6.0)
+
+    current_event_flag = float(max(
+        safe_info_int(info, "event_now", 0),
+        safe_info_int(info, "on_encounter", 0),
+    ))
+
+    c_state_signed = safe_info_float(info, "c_state", 0.0)
+
+    event_val = safe_info_str(info, "event_valence_hidden", "none")
+    consequence_val = safe_info_str(info, "consequence_valence_hidden", "none")
+
+    sup_event, mis_event = valence_to_flags(event_val)
+    sup_cons, mis_cons = valence_to_flags(consequence_val)
+
+    supportive_flag = max(sup_event, sup_cons)
+    misleading_flag = max(mis_event, mis_cons)
+
+    feats = torch.cat(
+        [
+            pred_err_now_ratio,       # 0
+            pred_err_ema_short_ratio, # 1
+            pred_err_ema_long_log,    # 2
+            pred_err_rise_ratio,      # 3
+            torch.tensor([[recent_event_trace]], device=device, dtype=torch.float32),       # 4
+            torch.tensor([[recent_consequence_trace]], device=device, dtype=torch.float32), # 5
+            torch.tensor([[current_event_flag]], device=device, dtype=torch.float32),       # 6
+            torch.tensor([[c_state_signed]], device=device, dtype=torch.float32),           # 7
+            torch.tensor([[supportive_flag]], device=device, dtype=torch.float32),          # 8
+            torch.tensor([[misleading_flag]], device=device, dtype=torch.float32),          # 9
+        ],
+        dim=-1,
+    )
+    return feats
 
 
 def load_phase1_checkpoint(args: argparse.Namespace):
@@ -143,16 +239,13 @@ def load_phase1_checkpoint(args: argparse.Namespace):
     agent_cfg.world.learnable_well_width = bool(args.learnable_well_width)
     agent_cfg.world.temperature = float(args.temperature)
 
-    # Phase 2 always uses vector-valued evidence feedback.
     agent_cfg.world.use_error_feedback = True
     agent_cfg.world.err_dim = len(ERR_FEATURE_NAMES)
 
     agent = CEARAgent(agent_cfg)
-    # IMPORTANT: Phase 1 ckpt may have an older alpha_net input dimension.
-    # We therefore load only shape-compatible weights and leave the new alpha_net randomly initialized.
+
     ckpt_state = ckpt["agent_state"]
     model_state = agent.state_dict()
-
     filtered_state = {}
     skipped = []
 
@@ -161,9 +254,7 @@ def load_phase1_checkpoint(args: argparse.Namespace):
             skipped.append((k, "missing_in_current_model"))
             continue
         if model_state[k].shape != v.shape:
-            skipped.append(
-                (k, f"shape_mismatch ckpt={tuple(v.shape)} current={tuple(model_state[k].shape)}")
-            )
+            skipped.append((k, f"shape_mismatch ckpt={tuple(v.shape)} current={tuple(model_state[k].shape)}"))
             continue
         filtered_state[k] = v
 
@@ -204,88 +295,6 @@ def pairwise_separation_loss(centers: torch.Tensor) -> torch.Tensor:
     return torch.exp(-min_dist).mean()
 
 
-def safe_info_float(info: Dict[str, Any], key: str, default: float = 0.0) -> float:
-    try:
-        return float(info.get(key, default))
-    except Exception:
-        return float(default)
-
-
-def safe_info_int(info: Dict[str, Any], key: str, default: int = 0) -> int:
-    try:
-        return int(info.get(key, default))
-    except Exception:
-        return int(default)
-
-
-def exp_trace_from_steps(steps: int, tau: float) -> float:
-    if steps is None or steps < 0:
-        return 0.0
-    return float(np.exp(-float(steps) / max(float(tau), 1e-6)))
-
-
-def build_err_t(
-    prev_pred_err: torch.Tensor,
-    err_ema_short: torch.Tensor,
-    err_ema_long: torch.Tensor,
-    info: Dict[str, Any],
-    device: torch.device,
-) -> torch.Tensor:
-    """
-    Vector-valued evidence package for adaptive alpha.
-
-    Shape: (1, 10)
-    """
-    eps = 1e-3
-    long_base = torch.clamp(err_ema_long, min=eps)
-
-    # Make ratio channels less explosively positive.
-    pred_err_now_ratio = torch.log1p(prev_pred_err / long_base)
-    pred_err_ema_short_ratio = torch.log1p(err_ema_short / long_base)
-    pred_err_ema_long_log = torch.log1p(err_ema_long)
-    pred_err_rise_ratio = torch.tanh((err_ema_short - err_ema_long) / (long_base + eps))
-
-    steps_since_event = safe_info_int(info, "steps_since_last_event", -1)
-    steps_since_consequence = safe_info_int(info, "steps_since_last_consequence", -1)
-
-    recent_event_trace = exp_trace_from_steps(steps_since_event, tau=4.0)
-    recent_consequence_trace = exp_trace_from_steps(steps_since_consequence, tau=6.0)
-
-    current_event_flag = float(
-        max(
-            safe_info_int(info, "on_encounter", 0),
-            safe_info_int(info, "event_now", 0),
-        )
-    )
-
-    c_state_signed = safe_info_float(info, "c_state", 0.0)
-
-    # encounter_outcome convention:
-    # > 1.0 => supportive side
-    # < 1.0 => misleading side
-    outcome_raw = safe_info_float(info, "encounter_outcome", 1.0)
-    supportive_flag = max(outcome_raw - 1.0, 0.0)
-    misleading_flag = max(1.0 - outcome_raw, 0.0)
-
-    feats = torch.cat(
-        [
-            pred_err_now_ratio,  # 0
-            pred_err_ema_short_ratio,  # 1
-            pred_err_ema_long_log,  # 2
-            pred_err_rise_ratio,  # 3
-            torch.tensor([[recent_event_trace]], device=device, dtype=torch.float32),  # 4
-            torch.tensor([[recent_consequence_trace]], device=device, dtype=torch.float32),  # 5
-            torch.tensor([[current_event_flag]], device=device, dtype=torch.float32),  # 6
-            torch.tensor([[c_state_signed]], device=device, dtype=torch.float32),  # 7
-            torch.tensor([[supportive_flag]], device=device, dtype=torch.float32),  # 8
-            torch.tensor([[misleading_flag]], device=device, dtype=torch.float32),  # 9
-        ],
-        dim=-1,
-    )
-
-    return feats
-
-
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase1_ckpt", type=str, required=True)
@@ -302,7 +311,6 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--carry_g_between_episodes", action="store_true")
     ap.add_argument("--save_traj", action="store_true")
 
-    # keep them as options, but default is frozen
     ap.add_argument("--freeze_encoder", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--freeze_state", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--freeze_policy", action=argparse.BooleanOptionalAction, default=True)
@@ -320,6 +328,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--misleading_impulse", type=float, default=-0.45)
     ap.add_argument("--distortion_scale", type=float, default=0.30)
     ap.add_argument("--event_delay_steps", type=int, default=3)
+    ap.add_argument("--schedule_jitter_std", type=float, default=5.0)
+    ap.add_argument("--min_event_gap", type=int, default=6)
+    ap.add_argument("--event_marker_signal", type=float, default=0.25)
+    ap.add_argument("--disable_event_marker", action="store_true")
 
     ap.add_argument("--update_mode", type=str, default="fixed", choices=["fixed", "adaptive"])
     ap.add_argument("--alpha_fixed", type=float, default=0.20)
@@ -356,8 +368,6 @@ def main() -> None:
     apply_freeze(agent.state, args.freeze_state)
     apply_freeze(agent.policy, args.freeze_policy)
     apply_freeze(decoder, args.freeze_decoder)
-
-    # world is always trainable in phase2
     unfreeze_module(agent.world)
 
     params = [p for p in list(agent.parameters()) + list(decoder.parameters()) if p.requires_grad]
@@ -422,6 +432,10 @@ def main() -> None:
         g_start = agent.get_latents()["g"].detach().clone().cpu().numpy()[0]
 
         ep_err_feat_sums = {name: 0.0 for name in ERR_FEATURE_NAMES}
+        ep_supportive_events = 0
+        ep_misleading_events = 0
+        ep_supportive_consequences = 0
+        ep_misleading_consequences = 0
 
         while not done:
             x_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
@@ -489,6 +503,27 @@ def main() -> None:
                 for name, val in zip(ERR_FEATURE_NAMES, err_vec_np.tolist()):
                     ep_err_feat_sums[name] += float(val)
 
+                event_val_hidden = safe_info_str(info2, "event_valence_hidden", "none")
+                consequence_val_hidden = safe_info_str(info2, "consequence_valence_hidden", "none")
+
+                is_supportive_event = int(
+                    safe_info_int(info2, "event_now", 0) > 0 and event_val_hidden == "supportive"
+                )
+                is_misleading_event = int(
+                    safe_info_int(info2, "event_now", 0) > 0 and event_val_hidden == "misleading"
+                )
+                is_supportive_consequence = int(
+                    safe_info_int(info2, "consequence_now", 0) > 0 and consequence_val_hidden == "supportive"
+                )
+                is_misleading_consequence = int(
+                    safe_info_int(info2, "consequence_now", 0) > 0 and consequence_val_hidden == "misleading"
+                )
+
+                ep_supportive_events += is_supportive_event
+                ep_misleading_events += is_misleading_event
+                ep_supportive_consequences += is_supportive_consequence
+                ep_misleading_consequences += is_misleading_consequence
+
                 if args.save_traj:
                     row = {
                         "episode": ep,
@@ -508,13 +543,20 @@ def main() -> None:
                         "pred_err_ema_long": float(err_ema_long.mean().item()),
                         "basin_id": basin_id,
                         "basin_conf": basin_conf_scalar,
-                        "consequence_active": int(abs(float(info2.get("c_state", 0.0))) > 1e-6),
                         "c_state": float(info2.get("c_state", 0.0)),
+                        "consequence_active": int(abs(float(info2.get("c_state", 0.0))) > 1e-6),
                         "event_now": int(info2.get("event_now", 0)),
                         "consequence_now": int(info2.get("consequence_now", 0)),
+                        "event_id_now": int(info2.get("event_id_now", -1)),
+                        "consequence_id_now": int(info2.get("consequence_id_now", -1)),
+                        "event_valence_hidden": event_val_hidden,
+                        "consequence_valence_hidden": consequence_val_hidden,
+                        "is_supportive_event": is_supportive_event,
+                        "is_misleading_event": is_misleading_event,
+                        "is_supportive_consequence": is_supportive_consequence,
+                        "is_misleading_consequence": is_misleading_consequence,
                         "steps_since_last_event": int(info2.get("steps_since_last_event", -1)),
                         "steps_since_last_consequence": int(info2.get("steps_since_last_consequence", -1)),
-                        "encounter_outcome": float(info2.get("encounter_outcome", 1.0)),
                         "loss": float(loss.item()),
                         "loss_pred": float(loss_pred.item()),
                         "loss_energy": float(loss_energy.item()),
@@ -561,11 +603,13 @@ def main() -> None:
             "g_shift": float(np.linalg.norm(g_end - g_start)),
             "final_x": int(info.get("x", -1)),
             "final_c": float(info.get("c_state", 0.0)),
+            "supportive_event_count": ep_supportive_events,
+            "misleading_event_count": ep_misleading_events,
+            "supportive_consequence_count": ep_supportive_consequences,
+            "misleading_consequence_count": ep_misleading_consequences,
         }
-
         for name in ERR_FEATURE_NAMES:
             ep_row[f"mean_err_{name}"] = ep_err_feat_sums[name] / max(t, 1)
-
         ep_rows.append(ep_row)
 
         if (ep + 1) % max(args.print_every, 1) == 0:
@@ -575,7 +619,8 @@ def main() -> None:
                 f"energy={ep_row['mean_energy']:.5f} "
                 f"alpha={ep_row['mean_alpha']:.4f} "
                 f"err_norm={ep_row['mean_err_norm']:.4f} "
-                f"switches={switches}"
+                f"switches={switches} "
+                f"supC={ep_supportive_consequences} misC={ep_misleading_consequences}"
             )
 
     traj_path = try_save_table(traj_rows, run_dir / "traj") if args.save_traj else None
