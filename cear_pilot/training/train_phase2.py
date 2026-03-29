@@ -323,13 +323,13 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--valence_sequence", type=str, default="SSSS")
     ap.add_argument("--sigma_left", type=float, default=0.20)
     ap.add_argument("--sigma_right", type=float, default=0.10)
-    ap.add_argument("--c_decay", type=float, default=0.91)
+    ap.add_argument("--c_decay", type=float, default=0.985)  # half-life is around 45 steps
     ap.add_argument("--supportive_impulse", type=float, default=0.45)
     ap.add_argument("--misleading_impulse", type=float, default=-0.45)
-    ap.add_argument("--distortion_scale", type=float, default=0.30)
-    ap.add_argument("--event_delay_steps", type=int, default=3)
+    ap.add_argument("--distortion_scale", type=float, default=0.55)
+    ap.add_argument("--event_delay_steps", type=int, default=10)
     ap.add_argument("--schedule_jitter_std", type=float, default=5.0)
-    ap.add_argument("--min_event_gap", type=int, default=6)
+    ap.add_argument("--min_event_gap", type=int, default=16)
     ap.add_argument("--event_marker_signal", type=float, default=0.25)
     ap.add_argument("--disable_event_marker", action="store_true")
 

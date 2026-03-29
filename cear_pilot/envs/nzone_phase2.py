@@ -48,8 +48,8 @@ class NZonePhase2Config:
     schedule_pattern: str = "1-1-1-1"   # one of: "1-1-1-1", "2-2", "3-1", "1-3"
     valence_sequence: str = "SSSS"      # exactly 4 chars over {"S", "M"}
     schedule_jitter_std: float = 5.0
-    min_event_gap: int = 6
-    event_delay_steps: int = 3
+    min_event_gap: int = 16
+    event_delay_steps: int = 10
 
     # Weak ambiguous event cue
     use_event_marker: bool = True
@@ -60,11 +60,11 @@ class NZonePhase2Config:
     # Hidden consequence state c_t
     # -------------------------
     c_init: float = 0.0
-    c_decay: float = 0.91
+    c_decay: float = 0.985 # half-life is around 45 steps
     c_max: float = 1.0
     supportive_impulse: float = 0.45
     misleading_impulse: float = -0.45
-    distortion_scale: float = 0.30
+    distortion_scale: float = 0.55
 
     # structured distortion over the 8-neighbor patch.
     # Patch order: NW, N, NE, W, E, SW, S, SE
