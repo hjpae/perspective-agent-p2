@@ -1,0 +1,33 @@
+{
+  "episodes": 180,
+  "schedule_pattern": "1-1-1-1",
+  "valence_sequence": "SSSS",
+  "selected_err_channels": [
+    "mean_err_pred_err_ema_long_log",
+    "mean_err_norm",
+    "mean_err_pred_err_rise_ratio",
+    "mean_err_pred_err_now_ratio",
+    "mean_err_pred_err_ema_short_ratio",
+    "mean_err_c_state_signed"
+  ],
+  "mean_alpha_overall_mean": 0.33970088741569604,
+  "mean_pred_loss_overall_mean": 0.052216607496485164,
+  "mean_energy_overall_mean": 0.04936161831112931,
+  "g_shift_overall_mean": 0.6280936586153176,
+  "mean_delta_g_overall_mean": 0.08196014657862163,
+  "switches_overall_mean": 1.45,
+  "mean_err_norm_overall_mean": 1.167184577691334,
+  "alpha_min": 0.05036492645740509,
+  "alpha_max": 0.49999895691871643,
+  "alpha_mean": 0.3397008874156961,
+  "alpha_std": 0.18825861389729223,
+  "event_now_mean": 0.013333333333333334,
+  "consequence_now_mean": 0.013333333333333334,
+  "err_supportive_flag_mean": 0.0,
+  "err_misleading_flag_mean": 0.0,
+  "alpha_var_all": 0.03544130570652975,
+  "alpha_var_event_now": 0.031967501688883834,
+  "alpha_var_event_ratio_vs_all": 0.9019843104424367,
+  "alpha_var_consequence_now": 0.031567144523954274,
+  "alpha_var_consequence_ratio_vs_all": 0.8906879668978535
+}

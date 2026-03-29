@@ -27,6 +27,20 @@ from cear_pilot.models.agent import CEARAgent, AgentConfig
 from cear_pilot.models.decoder import ObsDecoder, DecoderConfig
 
 
+ERR_FEATURE_NAMES = [
+    "pred_err_now_ratio",
+    "pred_err_ema_short_ratio",
+    "pred_err_ema_long_log",
+    "pred_err_rise_ratio",
+    "recent_event_trace",
+    "recent_consequence_trace",
+    "current_event_flag",
+    "c_state_signed",
+    "supportive_flag",
+    "misleading_flag",
+]
+
+
 def timestamp_id() -> str:
     return time.strftime("%Y%m%d_%H%M%S")
 
@@ -69,6 +83,10 @@ def load_agent_decoder(ckpt_path: str, device: str) -> Tuple[CEARAgent, ObsDecod
         agent_cfg.world.well_width = float(a.get("well_width", agent_cfg.world.well_width))
         agent_cfg.world.temperature = float(a.get("temperature", agent_cfg.world.temperature))
 
+    # evidence vector is always used in phase2
+    agent_cfg.world.use_error_feedback = True
+    agent_cfg.world.err_dim = len(ERR_FEATURE_NAMES)
+
     agent = CEARAgent(agent_cfg)
     agent.load_state_dict(ckpt["agent_state"], strict=False)
 
@@ -101,7 +119,79 @@ def collect_obs_prediction_error(decoder: ObsDecoder, g_t: torch.Tensor, x_next:
         xhat_all = decoder.predict_all_actions(g_t)
         per_a_err = torch.mean((xhat_all - x_next_t.unsqueeze(1)) ** 2, dim=-1).squeeze(0)
         e_np = per_a_err.detach().float().cpu().numpy()
-    return float(e_np.min()), float(e_np.max()), float(e_np.std())
+        return float(e_np.min()), float(e_np.max()), float(e_np.std())
+
+
+def safe_info_float(info: Dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        return float(info.get(key, default))
+    except Exception:
+        return float(default)
+
+
+def safe_info_int(info: Dict[str, Any], key: str, default: int = 0) -> int:
+    try:
+        return int(info.get(key, default))
+    except Exception:
+        return int(default)
+
+
+def exp_trace_from_steps(steps: int, tau: float) -> float:
+    if steps is None or steps < 0:
+        return 0.0
+    return float(np.exp(-float(steps) / max(float(tau), 1e-6)))
+
+
+def build_err_t(
+    prev_pred_err: torch.Tensor,
+    err_ema_short: torch.Tensor,
+    err_ema_long: torch.Tensor,
+    info: Dict[str, Any],
+    device: torch.device,
+) -> torch.Tensor:
+    eps = 1e-4
+    long_base = torch.clamp(err_ema_long, min=eps)
+
+    pred_err_now_ratio = prev_pred_err / long_base
+    pred_err_ema_short_ratio = err_ema_short / long_base
+    pred_err_ema_long_log = torch.log1p(err_ema_long)
+    pred_err_rise_ratio = (err_ema_short - err_ema_long) / long_base
+
+    steps_since_event = safe_info_int(info, "steps_since_last_event", -1)
+    steps_since_consequence = safe_info_int(info, "steps_since_last_consequence", -1)
+
+    recent_event_trace = exp_trace_from_steps(steps_since_event, tau=4.0)
+    recent_consequence_trace = exp_trace_from_steps(steps_since_consequence, tau=6.0)
+
+    current_event_flag = float(
+        max(
+            safe_info_int(info, "on_encounter", 0),
+            safe_info_int(info, "event_now", 0),
+        )
+    )
+
+    c_state_signed = safe_info_float(info, "c_state", 0.0)
+
+    outcome_raw = safe_info_float(info, "encounter_outcome", 1.0)
+    supportive_flag = max(outcome_raw - 1.0, 0.0)
+    misleading_flag = max(1.0 - outcome_raw, 0.0)
+
+    feats = torch.cat(
+        [
+            pred_err_now_ratio,
+            pred_err_ema_short_ratio,
+            pred_err_ema_long_log,
+            pred_err_rise_ratio,
+            torch.tensor([[recent_event_trace]], device=device, dtype=torch.float32),
+            torch.tensor([[recent_consequence_trace]], device=device, dtype=torch.float32),
+            torch.tensor([[current_event_flag]], device=device, dtype=torch.float32),
+            torch.tensor([[c_state_signed]], device=device, dtype=torch.float32),
+            torch.tensor([[supportive_flag]], device=device, dtype=torch.float32),
+            torch.tensor([[misleading_flag]], device=device, dtype=torch.float32),
+        ],
+        dim=-1,
+    )
+    return feats
 
 
 def main() -> None:
@@ -138,6 +228,7 @@ def main() -> None:
         "args": vars(args),
         "env_cfg": env_cfg.__dict__,
         "source_meta": meta,
+        "err_feature_names": list(ERR_FEATURE_NAMES),
     }
     (run_dir / "meta.json").write_text(json.dumps(meta_out, indent=2))
 
@@ -161,6 +252,17 @@ def main() -> None:
         recovery_anchor = None
         switches = 0
 
+        prev_pred_err = torch.zeros((1, 1), device=args.device, dtype=torch.float32)
+        err_ema_short = torch.zeros((1, 1), device=args.device, dtype=torch.float32)
+        err_ema_long = torch.zeros((1, 1), device=args.device, dtype=torch.float32)
+
+        ep_alpha_sum = 0.0
+        ep_delta_g_sum = 0.0
+        ep_entropy_sum = 0.0
+        ep_recovery_valid = 0
+        ep_recovery_sum = 0.0
+        ep_err_feat_sums = {name: 0.0 for name in ERR_FEATURE_NAMES}
+
         while not done:
             if args.do_g_at >= 0 and t == args.do_g_at:
                 recovery_anchor = agent.get_latents()["g"].detach().clone()
@@ -173,8 +275,17 @@ def main() -> None:
             x_t = torch.tensor(obs, dtype=torch.float32, device=args.device).unsqueeze(0)
             p_t = F.one_hot(torch.tensor([last_action], device=args.device), num_classes=n_actions).float()
 
+            err_t = build_err_t(
+                prev_pred_err=prev_pred_err,
+                err_ema_short=err_ema_short,
+                err_ema_long=err_ema_long,
+                info=info,
+                device=torch.device(args.device),
+            )
+
             with torch.no_grad():
-                action, out = agent.step(x_t, p_t, greedy=args.greedy, ablate_g=args.ablate_g, err_t=None)
+                action, out = agent.step(x_t, p_t, greedy=args.greedy, ablate_g=args.ablate_g, err_t=err_t)
+
             a_int = int(action.item())
             obs_next, _, terminated, truncated, info2 = env.step(a_int)
 
@@ -185,20 +296,37 @@ def main() -> None:
                 g = out["g"].detach().cpu().numpy()[0]
                 basin_id = int(out["basin_id"].detach().cpu().item())
                 basin_conf = float(out["basin_probs"].max(dim=-1).values.mean().item())
+
                 if basin_prev is not None and basin_id != basin_prev:
                     switches += 1
                 basin_prev = basin_id
+
                 delta_g = 0.0 if g_prev is None else float(np.linalg.norm(g - g_prev))
                 g_prev = g.copy()
 
                 if recovery_anchor is not None:
                     recovery_dist = float(torch.norm(out["g"] - recovery_anchor, dim=-1).mean().item())
                     time_since_perturb = t - int(perturb_step)
+                    ep_recovery_sum += recovery_dist
+                    ep_recovery_valid += 1
                 else:
                     recovery_dist = np.nan
                     time_since_perturb = -1
 
                 e_min, e_max, e_std = collect_obs_prediction_error(decoder, out["g"], obs_next, args.device)
+                pred_err_scalar = torch.tensor([[e_min]], device=args.device, dtype=torch.float32)
+
+                prev_pred_err = pred_err_scalar
+                err_ema_short = 0.85 * err_ema_short + 0.15 * prev_pred_err
+                err_ema_long = 0.97 * err_ema_long + 0.03 * prev_pred_err
+
+                ep_alpha_sum += float(out["alpha"].mean().item())
+                ep_delta_g_sum += delta_g
+                ep_entropy_sum += entropy
+
+                err_vec_np = err_t.detach().cpu().numpy()[0]
+                for name, val in zip(ERR_FEATURE_NAMES, err_vec_np.tolist()):
+                    ep_err_feat_sums[name] += float(val)
 
             row = {
                 "episode": ep,
@@ -221,11 +349,17 @@ def main() -> None:
                 "pred_err_max": e_max,
                 "pred_err_std": e_std,
                 "on_encounter": int(info2.get("on_encounter", 0)),
-                "encounter_outcome": int(info2.get("encounter_outcome", 1)),
+                "event_now": int(info2.get("event_now", 0)),
+                "consequence_now": int(info2.get("consequence_now", 0)),
+                "encounter_outcome": float(info2.get("encounter_outcome", 1.0)),
                 "c_state": float(info2.get("c_state", 0.0)),
+                "steps_since_last_event": int(info2.get("steps_since_last_event", -1)),
+                "steps_since_last_consequence": int(info2.get("steps_since_last_consequence", -1)),
                 "supportive_timer": int(info2.get("supportive_timer", 0)),
                 "misleading_timer": int(info2.get("misleading_timer", 0)),
             }
+            for i, v in enumerate(err_vec_np.tolist()):
+                row[f"err_{ERR_FEATURE_NAMES[i]}"] = float(v)
             for i, v in enumerate(g):
                 row[f"g_{i}"] = float(v)
             rows.append(row)
@@ -236,12 +370,19 @@ def main() -> None:
             t += 1
             done = bool(terminated or truncated)
 
-        summary_rows.append({
+        summary_row = {
             "episode": ep,
             "switches": switches,
             "final_x": int(info.get("x", -1)),
             "final_c": float(info.get("c_state", 0.0)),
-        })
+            "mean_alpha": ep_alpha_sum / max(t, 1),
+            "mean_delta_g": ep_delta_g_sum / max(t, 1),
+            "mean_entropy": ep_entropy_sum / max(t, 1),
+            "mean_recovery_dist": ep_recovery_sum / max(ep_recovery_valid, 1) if ep_recovery_valid > 0 else np.nan,
+        }
+        for name in ERR_FEATURE_NAMES:
+            summary_row[f"mean_err_{name}"] = ep_err_feat_sums[name] / max(t, 1)
+        summary_rows.append(summary_row)
 
     traj_path = try_save_table(rows, run_dir / "traj")
     ep_path = try_save_table(summary_rows, run_dir / "episode_summary")
