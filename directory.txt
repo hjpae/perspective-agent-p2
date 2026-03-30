@@ -1,0 +1,35 @@
+cear_pilot/
+  README.md
+  requirements.yml
+  directory.txt
+  smoketest.sh
+  run_alpha_sweep.sh
+
+  envs/
+    nzone_phase2.py 
+    __init__.py
+
+  models/
+    encoder.py               # x_t -> z_t, p_t -> s_t
+    world_latent.py          # (s_t, z_t, g_{t-1}) -> g_t (slow RNN/GRU)
+    policy.py                # pi(a|s_t,g_t)
+    agent.py                 # step(), update(), get_latents()
+    decoder.py
+    state_head.py
+    __init__.py
+
+  training/
+    train_phase2.py
+    pygame_viewer.py         # (optional) pygame visualization on GUI head
+
+  experiments/
+    collect_phase2.py
+
+  analysis/
+    compare_alpha_sweep.py   # alpha sweep comparison plot  
+    plot_train_phase2.py     # single train result (alpha adaptive) plot
+    metrics.py 
+
+  outputs/
+    runs/<encounter><seed><timestamp>/
+    figs/  # figures from analysis are saved here

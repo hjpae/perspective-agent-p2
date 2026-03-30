@@ -1,0 +1,17 @@
+{
+  "phase1_ckpt": "outputs/runs/p1_s0/ckpt_final.pt",
+  "device": "cuda",
+  "alphas": [0.05, 0.25, 0.50],
+  "valences": ["SSSS", "MMMM"],
+  "seeds": [0, 1, 2, 3, 4, 5],
+  "episodes": 180,
+  "collect_episodes": 40,
+  "max_steps": 300,
+  "schedule_pattern": "1-1-1-1",
+  "c_decay": 0.985,
+  "distortion_scale": 0.55,
+  "event_delay_steps": 10,
+  "min_event_gap": 16,
+  "max_parallel_jobs": 2,
+  "collect_seed": 1000
+}
