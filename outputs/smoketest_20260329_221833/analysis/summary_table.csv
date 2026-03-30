@@ -1,3 +1,0 @@
-alpha,valence,n_seeds,mean_pred_loss_median,mean_pred_loss_q1,mean_pred_loss_q3,mean_delta_g_median,mean_delta_g_q1,mean_delta_g_q3,mean_energy_median,mean_energy_q1,mean_energy_q3,mean_entropy_median,mean_entropy_q1,mean_entropy_q3,mean_alpha_median,mean_alpha_q1,mean_alpha_q3,g_shift_median,g_shift_q1,g_shift_q3,switches_median,switches_q1,switches_q3
-0.25,SSSS,1,0.09715921857083837,0.09715921857083837,0.09715921857083837,0.09789417832515857,0.09789417832515857,0.09789417832515857,1.047899651589493,1.047899651589493,1.047899651589493,1.2883937168121338,1.2883937168121338,1.2883937168121338,0.25,0.25,0.25,2.3401286602020264,2.3401286602020264,2.3401286602020264,1.4,1.4,1.4
-0.25,MMMM,0,,,,,,,,,,,,,,,,,,,,,
