@@ -113,6 +113,8 @@ def resolve_env_from_phase1_meta(meta: Dict[str, Any], args: argparse.Namespace)
     env_cfg.supportive_impulse = float(args.supportive_impulse)
     env_cfg.misleading_impulse = float(args.misleading_impulse)
     env_cfg.distortion_scale = float(args.distortion_scale)
+    env_cfg.regime_mu_scale = float(args.regime_mu_scale)
+    env_cfg.regime_sigma_scale = float(args.regime_sigma_scale)
     env_cfg.event_delay_steps = int(args.event_delay_steps)
     env_cfg.schedule_jitter_std = float(args.schedule_jitter_std)
     env_cfg.min_event_gap = int(args.min_event_gap)
@@ -327,6 +329,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--supportive_impulse", type=float, default=0.45)
     ap.add_argument("--misleading_impulse", type=float, default=-0.45)
     ap.add_argument("--distortion_scale", type=float, default=0.55)
+    ap.add_argument("--regime_mu_scale", type=float, default=0.30)
+    ap.add_argument("--regime_sigma_scale", type=float, default=0.40)
     ap.add_argument("--event_delay_steps", type=int, default=10)
     ap.add_argument("--schedule_jitter_std", type=float, default=5.0)
     ap.add_argument("--min_event_gap", type=int, default=16)
@@ -351,12 +355,19 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--w_energy", type=float, default=0.02)
     ap.add_argument("--w_basin", type=float, default=0.02)
     ap.add_argument("--w_sep", type=float, default=0.05)
+    
     return ap.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
+    print("[freeze flags]")
+    print("  freeze_encoder :", args.freeze_encoder)
+    print("  freeze_state   :", args.freeze_state)
+    print("  freeze_policy  :", args.freeze_policy)
+    print("  freeze_decoder :", args.freeze_decoder)
+    
     seed_everything(args.seed)
     device = torch.device(args.device)
 

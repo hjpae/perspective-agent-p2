@@ -1,5 +1,6 @@
 # cear_pilot/envs/nzone_phase2.py
 # -*- coding: utf-8 -*-
+# PATCHED: regime-coupled dynamics (c_t modulates mu + sigma structurally)
 
 from __future__ import annotations
 
@@ -66,6 +67,15 @@ class NZonePhase2Config:
     misleading_impulse: float = -0.45
     distortion_scale: float = 0.55
 
+    # ── Regime-coupled dynamics (NEW) ──────────────────
+    # c_t modulates observation structure, not just additive noise.
+    # regime_mu_scale: c_t shifts cell means via a fixed spatial pattern
+    # regime_sigma_scale: c_t modulates noise level (+c_t → less noise)
+    regime_mu_scale: float = 0.30
+    regime_sigma_scale: float = 0.40
+    regime_map_seed: int = 42
+    # ──────────────────────────────────────────────────
+
     # structured distortion over the 8-neighbor patch.
     # Patch order: NW, N, NE, W, E, SW, S, SE
     supportive_basis: Tuple[float, ...] = (
@@ -128,6 +138,11 @@ class NZonePhase2Env(gym.Env):
         self._mu_map = np.zeros((self.H, self.W), dtype=np.float32)
         self._sigma_map = np.zeros((self.H, self.W), dtype=np.float32)
         self._build_static_maps(seed=0)
+
+        # ── Regime-coupled dynamics: fixed spatial pattern (NEW) ──
+        _regime_rng = np.random.default_rng(int(self.cfg.regime_map_seed))
+        self._regime_mu_map = _regime_rng.normal(0.0, 1.0, (self.H, self.W)).astype(np.float32)
+        # ──────────────────────────────────────────────────────────
 
         self._supportive_basis = self._normalize_basis(np.asarray(self.cfg.supportive_basis, dtype=np.float32))
         self._misleading_basis = self._normalize_basis(np.asarray(self.cfg.misleading_basis, dtype=np.float32))
@@ -236,14 +251,22 @@ class NZonePhase2Env(gym.Env):
     def _clip_xy(self, x: int, y: int) -> Tuple[int, int]:
         return int(np.clip(x, 0, self.W - 1)), int(np.clip(y, 0, self.H - 1))
 
+    # ── PATCHED: c_t modulates sigma ──────────────────
     def _effective_sigma(self, x: int, y: int) -> float:
-        return float(self._sigma_map[int(y), int(x)])
+        base = float(self._sigma_map[int(y), int(x)])
+        regime_factor = 1.0 - float(self.cfg.regime_sigma_scale) * float(self.c_t)
+        regime_factor = max(0.05, min(3.0, regime_factor))
+        return base * regime_factor
+    # ──────────────────────────────────────────────────
 
+    # ── PATCHED: c_t modulates mu via spatial pattern ─
     def _sample_cell_signal(self, x: int, y: int) -> float:
         px, py = self._patch_coord(x, y)
         mu = float(self._mu_map[py, px])
+        mu += float(self.cfg.regime_mu_scale) * float(self.c_t) * float(self._regime_mu_map[py, px])
         sigma = self._effective_sigma(px, py)
         return float(mu + self._rng.normal(0.0, sigma))
+    # ──────────────────────────────────────────────────
 
     @staticmethod
     def _normalize_basis(v: np.ndarray) -> np.ndarray:
@@ -267,16 +290,12 @@ class NZonePhase2Env(gym.Env):
 
         if pattern == "1-1-1-1":
             centers = [45, 105, 165, 225]
-
         elif pattern == "2-2":
             centers = [80, 88, 212, 220]
-
         elif pattern == "3-1":
             centers = [64, 70, 76, 210]
-
         elif pattern == "1-3":
             centers = [90, 204, 210, 216]
-
         else:
             raise ValueError(
                 f"Unknown schedule_pattern='{pattern}'. "
@@ -288,7 +307,6 @@ class NZonePhase2Env(gym.Env):
         xs = np.clip(np.round(xs), 1, upper).astype(np.int32)
         xs.sort()
 
-        # Min-gap repair
         min_gap = int(self.cfg.min_event_gap)
         for _ in range(8):
             for i in range(1, 4):
