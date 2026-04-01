@@ -121,6 +121,10 @@ def load_all_traj(root, source="runs"):
         tr["formation_valence"] = parsed.get("formation_valence", parsed["valence"])
         tr["test_valence"] = parsed.get("test_valence", parsed["valence"])
         tr["is_reversal"] = parsed.get("is_reversal", False)
+        # Subsample: keep only last 3 episodes (sufficient for PCA)
+        if "episode" in tr.columns:
+            max_ep = tr["episode"].max()
+            tr = tr[tr["episode"] >= max(0, max_ep - 2)]
         frames.append(tr)
 
     if not frames:

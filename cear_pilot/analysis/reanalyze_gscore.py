@@ -125,6 +125,10 @@ def discover_and_load_traj(sweep_root, source="runs"):
         tr["valence"] = parsed["valence"]
         tr["seed"] = parsed["seed"]
         tr["p1_seed"] = parsed["p1_seed"]
+        # Subsample: keep only the last 3 episodes
+        if "episode" in tr.columns:
+            max_ep = tr["episode"].max()
+            tr = tr[tr["episode"] >= max(0, max_ep - 2)]
         frames.append(tr)
 
     if len(frames) == 0:
