@@ -215,6 +215,46 @@ def build_err_t(
     return feats
 
 
+def init_from_scratch(args: argparse.Namespace):
+    """Initialize agent and decoder from random weights (no Phase 1 pretrain)."""
+    device = str(args.device)
+
+    agent_cfg = AgentConfig(device=device)
+    agent_cfg.encoder.obs_dim = int(args.obs_dim)
+    agent_cfg.world.update_mode = str(args.update_mode)
+    agent_cfg.world.alpha_fixed = float(args.alpha_fixed)
+    agent_cfg.world.alpha_min = float(args.alpha_min)
+    agent_cfg.world.alpha_max = float(args.alpha_max)
+    agent_cfg.world.energy_mode = str(args.energy_mode)
+    agent_cfg.world.dyn_eta = float(args.dyn_eta)
+    agent_cfg.world.confine_lambda = float(args.confine_lambda)
+    agent_cfg.world.n_prototypes = int(args.n_prototypes)
+    agent_cfg.world.use_error_feedback = True
+    agent_cfg.world.err_dim = len(ERR_FEATURE_NAMES)
+
+    agent = CEARAgent(agent_cfg)
+    agent.to(device)
+
+    dec_cfg = DecoderConfig(g_dim=agent_cfg.world.g_dim, obs_dim=int(args.obs_dim))
+    decoder = ObsDecoder(dec_cfg)
+    decoder.to(device)
+
+    meta = {
+        "from_scratch": True,
+        "agent_cfg": {
+            "encoder": agent_cfg.encoder.__dict__,
+            "world": agent_cfg.world.__dict__,
+            "state": agent_cfg.state.__dict__,
+            "policy": agent_cfg.policy.__dict__,
+        },
+        "decoder_cfg": dec_cfg.__dict__,
+        "args": vars(args),
+    }
+
+    print("[init_from_scratch] initialized agent + decoder from random weights.")
+    return agent, decoder, meta
+
+
 def load_phase1_checkpoint(args: argparse.Namespace):
     ckpt = torch.load(args.phase1_ckpt, map_location=args.device)
     meta = ckpt["meta"]
@@ -299,7 +339,9 @@ def pairwise_separation_loss(centers: torch.Tensor) -> torch.Tensor:
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase1_ckpt", type=str, required=True)
+    ap.add_argument("--phase1_ckpt", type=str, default="")
+    ap.add_argument("--from_scratch", action="store_true",
+                    help="Train from random init. No Phase 1 checkpoint needed.")
     ap.add_argument("--device", type=str, default="cuda")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--episodes", type=int, default=150)
@@ -371,7 +413,12 @@ def main() -> None:
     seed_everything(args.seed)
     device = torch.device(args.device)
 
-    agent, decoder, meta = load_phase1_checkpoint(args)
+    if args.from_scratch:
+        agent, decoder, meta = init_from_scratch(args)
+    else:
+        if not args.phase1_ckpt:
+            raise ValueError("Either --from_scratch or --phase1_ckpt is required")
+        agent, decoder, meta = load_phase1_checkpoint(args)
     agent.to(device)
     decoder.to(device)
 
@@ -400,7 +447,7 @@ def main() -> None:
 
     meta_out = {
         "mode": "train_phase2_landscape",
-        "phase1_ckpt": str(Path(args.phase1_ckpt).resolve()),
+        "phase1_ckpt": str(Path(args.phase1_ckpt).resolve()) if args.phase1_ckpt else "from_scratch",
         "args": vars(args),
         "env_cfg": asdict(env_cfg),
         "base_meta": meta,
