@@ -1,0 +1,21 @@
+{
+  "mode": "collect_reversal",
+  "ckpt": "/workspace/perspective-agent-p2/outputs/experiment_full_20260330_180220/runs/a0.10_SSSS_s4_p1s2_20260331_065511/ckpt_final.pt",
+  "native_valence": "SSSS",
+  "opposite_valence": "MMMM",
+  "warmup_episodes": 5,
+  "reversal_episodes": 10,
+  "seed": 0,
+  "args": {
+    "ckpt": "outputs/experiment_full_20260330_180220/runs/a0.10_SSSS_s4_p1s2_20260331_065511/ckpt_final.pt",
+    "device": "cuda",
+    "native_valence": "SSSS",
+    "warmup_episodes": 5,
+    "reversal_episodes": 10,
+    "seed": 0,
+    "max_steps": 300,
+    "schedule_pattern": "1-1-1-1",
+    "outdir": "outputs/experiment_full_20260330_180220/reversal/a0.10_SSSS_s4_p1s2_20260331_065511",
+    "greedy": true
+  }
+}
