@@ -155,12 +155,12 @@ run_ablation() {
       --outdir "${OUT}/adaptive"
 
     echo ""
-    echo "=== Fixed alpha = 0.10 ==="
+    echo "=== Fixed alpha = 0.05 ==="
     python -m cear_pilot.training.train_phase2 ${COMMON} \
       --episodes "${EPISODES}" \
       --n_perturbations 4 \
       --update_mode fixed \
-      --alpha_fixed 0.10 \
+      --alpha_fixed 0.05 \
       --print_every "${PE}" \
       --outdir "${OUT}/fixed_010"
 

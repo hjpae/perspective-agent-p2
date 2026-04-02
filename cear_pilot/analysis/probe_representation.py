@@ -68,7 +68,17 @@ def g_cols(df):
     return sorted([c for c in df.columns if re.match(r"g_\d+$", c)],
                   key=lambda x: int(x.split("_")[-1]))
 
-
+def indexed_cols(df: pd.DataFrame, prefix: str):
+    """Return columns like f'{prefix}<int>' sorted by index."""
+    pat = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    cols = []
+    for c in df.columns:
+        m = pat.match(c)
+        if m:
+            cols.append((int(m.group(1)), c))
+    cols.sort(key=lambda x: x[0])
+    return [c for _, c in cols]
+    
 def extract_block_g(df, gc, block_id, n_late_eps=10):
     """Get mean g from the late portion of a given block."""
     blk = df[df["block_id"] == block_id]
@@ -183,7 +193,12 @@ def savefig(fig, path):
 
 
 def make_figures(results, g_labels, outdir):
-    n_z = len([c for c in results.columns if c.startswith("z_t_")])
+    zt_cols = indexed_cols(results, "z_t_")
+    gamma_dim_cols = indexed_cols(results, "gamma_")
+    beta_dim_cols = indexed_cols(results, "beta_")
+    n_z = len(zt_cols)
+    if n_z == 0:
+        raise ValueError("No z_t_<dim> columns found in probe results.")
 
     # ── Fig 1: z_t shift magnitude by zone and g condition ──
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
