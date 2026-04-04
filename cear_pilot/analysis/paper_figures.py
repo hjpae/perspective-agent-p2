@@ -42,11 +42,11 @@ Generates:
   Fig S2: FiLM gating per block
 
 Usage:
-    python -m cear_pilot.analysis.paper_figures \
-        --sweep_root outputs/phase2_all_xxx \
-        --mixed_root outputs/phase2_all_xxx \
-        --ablation_root outputs/phase2_all_xxx \
-        --outdir paper_figures
+python -m cear_pilot.analysis.paper_figures \
+  --sweep_root outputs/phase2_all_20260403_011254 \
+  --mixed_root outputs/phase2_all_20260403_011254 \
+  --ablation_root outputs/phase2_all_20260403_011254 \
+  --outdir outputs/phase2_all_20260403_011254/paper_figures
 """
 
 from __future__ import annotations
