@@ -1,0 +1,116 @@
+
+############################################
+# ABLATION worker | p1_seed=1 | p2_seed=3
+############################################
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0131 ||g||=2.427 α=0.298 nP=4 blk=0 (85s)
+[ep   60/150] PE=0.0145 ||g||=2.795 α=0.300 nP=4 blk=0 (153s)
+[ep   90/150] PE=0.0169 ||g||=3.122 α=0.300 nP=4 blk=0 (217s)
+[ep  120/150] PE=0.0131 ||g||=3.213 α=0.300 nP=4 blk=0 (305s)
+[ep  150/150] PE=0.0138 ||g||=3.485 α=0.300 nP=4 blk=0 (390s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s1/ablation/seed3/adaptive/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s1/ablation/seed3/adaptive/ckpt_final.pt
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0138 ||g||=2.136 α=0.050 nP=4 blk=0 (63s)
+[ep   60/150] PE=0.0137 ||g||=2.351 α=0.050 nP=4 blk=0 (122s)
+[ep   90/150] PE=0.0139 ||g||=2.697 α=0.050 nP=4 blk=0 (184s)
+[ep  120/150] PE=0.0130 ||g||=2.505 α=0.050 nP=4 blk=0 (244s)
+[ep  150/150] PE=0.0202 ||g||=3.118 α=0.050 nP=4 blk=0 (302s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s1/ablation/seed3/fixed_005/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s1/ablation/seed3/fixed_005/ckpt_final.pt
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0129 ||g||=2.296 α=0.800 nP=4 blk=0 (65s)
+[ep   60/150] PE=0.0129 ||g||=2.524 α=0.800 nP=4 blk=0 (126s)
+[ep   90/150] PE=0.0149 ||g||=2.573 α=0.800 nP=4 blk=0 (185s)
+[ep  120/150] PE=0.0126 ||g||=2.539 α=0.800 nP=4 blk=0 (246s)
+[ep  150/150] PE=0.0135 ||g||=2.533 α=0.800 nP=4 blk=0 (307s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s1/ablation/seed3/fast_080/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s1/ablation/seed3/fast_080/ckpt_final.pt
+
+=== Analyze ablation | p2_seed=3 ===
+
+  adaptive: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0162 ||g||=3.321 α=0.300
+
+  fast_080: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0131 ||g||=2.723 α=0.800
+
+  fixed_005: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0145 ||g||=3.123 α=0.050
+  [fig] ablation_comparison.png
+
+=== Probe representation: adaptive ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['high_perturb', 'g_zero']
+    high_perturb: ||g||=2.3094
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    high_perturb: mean z_shift=1.9680  mean |γ|=0.4334
+    g_zero: mean z_shift=0.2480  mean |γ|=0.0533
+    Cross-g z_t distance (high_perturb vs g_zero):
+      Z0: mean=2.2874 max=2.2937
+      Z1: mean=2.2195 max=2.2962
+      Z2: mean=1.9178 max=2.1765
+      Z3: mean=1.1188 max=1.2083
+      Z4: mean=1.3727 max=1.5557
+=== Probe representation: fixed_005 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['high_perturb', 'g_zero']
+    high_perturb: ||g||=2.0821
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    high_perturb: mean z_shift=3.7814  mean |γ|=0.7379
+    g_zero: mean z_shift=0.4689  mean |γ|=0.0815
+    Cross-g z_t distance (high_perturb vs g_zero):
+      Z0: mean=4.3663 max=4.3814
+      Z1: mean=4.2704 max=4.3812
+      Z2: mean=3.9113 max=4.2096
+      Z3: mean=2.6684 max=2.9599
+      Z4: mean=2.4479 max=2.5044
+=== Probe representation: fast_080 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['high_perturb', 'g_zero']
+    high_perturb: ||g||=2.1548
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    high_perturb: mean z_shift=1.3493  mean |γ|=0.2806
+    g_zero: mean z_shift=0.2537  mean |γ|=0.0470
+    Cross-g z_t distance (high_perturb vs g_zero):
+      Z0: mean=1.2056 max=1.2093
+      Z1: mean=1.1719 max=1.2106
+      Z2: mean=1.0273 max=1.1528
+      Z3: mean=0.9808 max=1.1690
+      Z4: mean=1.3479 max=1.4972

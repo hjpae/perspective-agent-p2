@@ -1,0 +1,135 @@
+
+############################################
+# MIXED worker | p1_seed=0 | p2_seed=2
+############################################
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[mixed] Schedule: [(0, 50), (4, 50), (0, 50)] → 150 episodes
+[ep   30/150] PE=0.0121 ||g||=2.550 α=0.299 nP=0 blk=0 (87s)
+[ep   60/150] PE=0.0132 ||g||=2.612 α=0.299 nP=4 blk=1 (173s)
+[ep   90/150] PE=0.0130 ||g||=2.613 α=0.125 nP=4 blk=1 (259s)
+[ep  120/150] PE=0.0120 ||g||=2.887 α=0.031 nP=0 blk=2 (336s)
+[ep  150/150] PE=0.0123 ||g||=3.044 α=0.030 nP=0 blk=2 (418s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s0/mixed/seed2/mixed_0_4_0/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s0/mixed/seed2/mixed_0_4_0/ckpt_final.pt
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[mixed] Schedule: [(0, 50), (6, 50), (0, 50)] → 150 episodes
+[ep   30/150] PE=0.0122 ||g||=2.520 α=0.299 nP=0 blk=0 (81s)
+[ep   60/150] PE=0.0130 ||g||=2.688 α=0.300 nP=6 blk=1 (164s)
+[ep   90/150] PE=0.0128 ||g||=2.869 α=0.300 nP=6 blk=1 (248s)
+[ep  120/150] PE=0.0126 ||g||=3.316 α=0.300 nP=0 blk=2 (334s)
+[ep  150/150] PE=0.0126 ||g||=3.434 α=0.300 nP=0 blk=2 (425s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s0/mixed/seed2/mixed_0_6_0/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s0/mixed/seed2/mixed_0_6_0/ckpt_final.pt
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[mixed] Schedule: [(2, 30), (0, 30), (4, 30), (0, 30), (6, 30)] → 150 episodes
+[ep   30/150] PE=0.0126 ||g||=2.458 α=0.300 nP=2 blk=0 (80s)
+[ep   60/150] PE=0.0122 ||g||=2.688 α=0.233 nP=0 blk=1 (162s)
+[ep   90/150] PE=0.0127 ||g||=2.622 α=0.110 nP=4 blk=2 (246s)
+[ep  120/150] PE=0.0125 ||g||=3.096 α=0.030 nP=0 blk=3 (331s)
+[ep  150/150] PE=0.0132 ||g||=2.826 α=0.033 nP=6 blk=4 (417s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s0/mixed/seed2/mixed_ramp/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s0/mixed/seed2/mixed_ramp/ckpt_final.pt
+
+=== Analyze: mixed_0_4_0 ===
+
+  mixed_0_4_0: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] mixed_history.png
+  [fig] film_gating.png
+  PE=0.0122 ||g||=3.048 α=0.057
+=== Probe representation: mixed_0_4_0 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['blk0_nP0', 'blk1_nP4', 'blk2_nP0', 'g_zero']
+    blk0_nP0: ||g||=2.4161
+    blk1_nP4: ||g||=2.4074
+    blk2_nP0: ||g||=2.7408
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    blk0_nP0: mean z_shift=2.8715  mean |γ|=0.5216
+    blk1_nP4: mean z_shift=2.5765  mean |γ|=0.4724
+    blk2_nP0: mean z_shift=3.1333  mean |γ|=0.5807
+    Cross-g z_t distance (blk0_nP0 vs blk1_nP4):
+      Z0: mean=0.3913 max=0.3997
+      Z1: mean=0.3778 max=0.3990
+      Z2: mean=0.3679 max=0.4111
+      Z3: mean=0.4374 max=0.4417
+      Z4: mean=0.4344 max=0.4375
+=== Analyze: mixed_0_6_0 ===
+
+  mixed_0_6_0: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] mixed_history.png
+  [fig] film_gating.png
+  PE=0.0122 ||g||=3.439 α=0.300
+=== Probe representation: mixed_0_6_0 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['blk0_nP0', 'blk1_nP6', 'blk2_nP0', 'g_zero']
+    blk0_nP0: ||g||=2.5189
+    blk1_nP6: ||g||=2.3575
+    blk2_nP0: ||g||=3.2067
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    blk0_nP0: mean z_shift=2.9087  mean |γ|=0.4547
+    blk1_nP6: mean z_shift=2.5789  mean |γ|=0.3976
+    blk2_nP0: mean z_shift=3.5330  mean |γ|=0.5592
+    Cross-g z_t distance (blk0_nP0 vs blk1_nP6):
+      Z0: mean=0.4648 max=0.4673
+      Z1: mean=0.4647 max=0.4697
+      Z2: mean=0.4625 max=0.4654
+      Z3: mean=0.4403 max=0.4483
+      Z4: mean=0.4256 max=0.4299
+=== Analyze: mixed_ramp ===
+
+  mixed_ramp: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] mixed_history.png
+  [fig] film_gating.png
+  PE=0.0131 ||g||=3.111 α=0.158
+=== Probe representation: mixed_ramp ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['blk0_nP2', 'blk1_nP0', 'blk2_nP4', 'blk3_nP0', 'blk4_nP6', 'g_zero']
+    blk0_nP2: ||g||=2.2735
+    blk1_nP0: ||g||=2.5539
+    blk2_nP4: ||g||=2.4220
+    blk3_nP0: ||g||=2.6778
+    blk4_nP6: ||g||=2.7381
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    blk0_nP2: mean z_shift=2.9476  mean |γ|=0.5784
+    blk1_nP0: mean z_shift=3.5732  mean |γ|=0.7051
+    blk2_nP4: mean z_shift=3.1041  mean |γ|=0.6146
+    blk3_nP0: mean z_shift=3.5277  mean |γ|=0.6957
+    blk4_nP6: mean z_shift=3.0582  mean |γ|=0.5989
+    Cross-g z_t distance (blk0_nP2 vs blk1_nP0):
+      Z0: mean=0.6633 max=0.6758
+      Z1: mean=0.6740 max=0.6880
+      Z2: mean=0.7110 max=0.7677
+      Z3: mean=0.7815 max=0.7935
+      Z4: mean=0.7928 max=0.8056

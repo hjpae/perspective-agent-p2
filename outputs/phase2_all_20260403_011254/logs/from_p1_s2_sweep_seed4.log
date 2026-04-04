@@ -1,0 +1,250 @@
+
+############################################
+# SWEEP worker | p1_seed=2 | p2_seed=4
+############################################
+
+=== n_perturbations=0 ===
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0134 ||g||=2.747 α=0.300 nP=0 blk=0 (76s)
+[ep   60/150] PE=0.0161 ||g||=2.725 α=0.300 nP=0 blk=0 (152s)
+[ep   90/150] PE=0.0138 ||g||=3.023 α=0.300 nP=0 blk=0 (232s)
+[ep  120/150] PE=0.0157 ||g||=3.115 α=0.300 nP=0 blk=0 (307s)
+[ep  150/150] PE=0.0144 ||g||=3.212 α=0.299 nP=0 blk=0 (382s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb0/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb0/ckpt_final.pt
+
+=== n_perturbations=1 ===
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0127 ||g||=2.676 α=0.298 nP=1 blk=0 (90s)
+[ep   60/150] PE=0.0127 ||g||=3.198 α=0.300 nP=1 blk=0 (176s)
+[ep   90/150] PE=0.0123 ||g||=3.168 α=0.300 nP=1 blk=0 (256s)
+[ep  120/150] PE=0.0142 ||g||=3.359 α=0.300 nP=1 blk=0 (333s)
+[ep  150/150] PE=0.0151 ||g||=3.278 α=0.300 nP=1 blk=0 (414s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb1/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb1/ckpt_final.pt
+
+=== n_perturbations=2 ===
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0135 ||g||=2.807 α=0.291 nP=2 blk=0 (89s)
+[ep   60/150] PE=0.0155 ||g||=2.743 α=0.300 nP=2 blk=0 (168s)
+[ep   90/150] PE=0.0139 ||g||=2.972 α=0.300 nP=2 blk=0 (239s)
+[ep  120/150] PE=0.0129 ||g||=2.817 α=0.300 nP=2 blk=0 (318s)
+[ep  150/150] PE=0.0127 ||g||=3.267 α=0.300 nP=2 blk=0 (394s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb2/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb2/ckpt_final.pt
+
+=== n_perturbations=3 ===
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0136 ||g||=2.735 α=0.300 nP=3 blk=0 (84s)
+[ep   60/150] PE=0.0142 ||g||=2.818 α=0.300 nP=3 blk=0 (170s)
+[ep   90/150] PE=0.0138 ||g||=2.613 α=0.300 nP=3 blk=0 (247s)
+[ep  120/150] PE=0.0132 ||g||=3.204 α=0.300 nP=3 blk=0 (333s)
+[ep  150/150] PE=0.0137 ||g||=3.161 α=0.291 nP=3 blk=0 (421s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb3/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb3/ckpt_final.pt
+
+=== n_perturbations=4 ===
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0142 ||g||=2.453 α=0.289 nP=4 blk=0 (97s)
+[ep   60/150] PE=0.0137 ||g||=2.850 α=0.299 nP=4 blk=0 (197s)
+[ep   90/150] PE=0.0133 ||g||=2.540 α=0.151 nP=4 blk=0 (296s)
+[ep  120/150] PE=0.0140 ||g||=2.990 α=0.279 nP=4 blk=0 (403s)
+[ep  150/150] PE=0.0147 ||g||=3.266 α=0.243 nP=4 blk=0 (495s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb4/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb4/ckpt_final.pt
+
+=== n_perturbations=5 ===
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0132 ||g||=2.560 α=0.300 nP=5 blk=0 (88s)
+[ep   60/150] PE=0.0133 ||g||=2.644 α=0.300 nP=5 blk=0 (165s)
+[ep   90/150] PE=0.0139 ||g||=3.040 α=0.300 nP=5 blk=0 (249s)
+[ep  120/150] PE=0.0135 ||g||=3.393 α=0.300 nP=5 blk=0 (334s)
+[ep  150/150] PE=0.0140 ||g||=3.313 α=0.300 nP=5 blk=0 (414s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb5/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb5/ckpt_final.pt
+
+=== n_perturbations=6 ===
+[load] Phase 1 loaded. New params: 3
+[freeze] Trainable: 3217  Total: 27230
+[ep   30/150] PE=0.0150 ||g||=2.671 α=0.300 nP=6 blk=0 (84s)
+[ep   60/150] PE=0.0142 ||g||=2.932 α=0.300 nP=6 blk=0 (163s)
+[ep   90/150] PE=0.0132 ||g||=3.065 α=0.300 nP=6 blk=0 (252s)
+[ep  120/150] PE=0.0136 ||g||=3.053 α=0.199 nP=6 blk=0 (338s)
+[ep  150/150] PE=0.0151 ||g||=3.447 α=0.298 nP=6 blk=0 (414s)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb6/traj.parquet (45000 rows)
+[save] outputs/phase2_all_20260403_011254/from_p1_s2/sweep/seed4/nperturb6/ckpt_final.pt
+
+=== Analyze sweep | p2_seed=4 ===
+
+  nperturb0: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] film_gating.png
+  PE=0.0142 ||g||=3.145 α=0.293
+
+  nperturb1: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0144 ||g||=3.099 α=0.291
+
+  nperturb2: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0133 ||g||=2.957 α=0.299
+
+  nperturb3: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0136 ||g||=3.306 α=0.298
+
+  nperturb4: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0143 ||g||=3.202 α=0.239
+
+  nperturb5: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0138 ||g||=3.331 α=0.300
+
+  nperturb6: 45000 rows, 150 eps
+  [fig] pe_trajectory.png
+  [fig] g_alpha_trajectory.png
+  [fig] zone_dwell.png
+  [fig] perturbation_response.png
+  [fig] film_gating.png
+  PE=0.0140 ||g||=3.144 α=0.223
+  [fig] sweep_comparison.png
+  [csv] sweep_summary.csv
+
+=== Probe representation: nperturb0 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['low_perturb', 'g_zero']
+    low_perturb: ||g||=2.5277
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    low_perturb: mean z_shift=2.4863  mean |γ|=0.4095
+    g_zero: mean z_shift=0.3539  mean |γ|=0.0551
+    Cross-g z_t distance (low_perturb vs g_zero):
+      Z0: mean=2.1354 max=2.1904
+      Z1: mean=2.2112 max=2.3381
+      Z2: mean=2.3085 max=2.3628
+      Z3: mean=2.0215 max=2.0798
+      Z4: mean=2.1180 max=2.1872
+=== Probe representation: nperturb1 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['g_zero']
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    g_zero: mean z_shift=0.3321  mean |γ|=0.0500
+=== Probe representation: nperturb2 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['g_zero']
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    g_zero: mean z_shift=0.4204  mean |γ|=0.0639
+=== Probe representation: nperturb3 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['g_zero']
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    g_zero: mean z_shift=0.4255  mean |γ|=0.0677
+=== Probe representation: nperturb4 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['high_perturb', 'g_zero']
+    high_perturb: ||g||=2.4528
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    high_perturb: mean z_shift=2.7719  mean |γ|=0.3684
+    g_zero: mean z_shift=0.4353  mean |γ|=0.0622
+    Cross-g z_t distance (high_perturb vs g_zero):
+      Z0: mean=2.6229 max=2.6662
+      Z1: mean=2.6667 max=2.7426
+      Z2: mean=2.6537 max=2.7469
+      Z3: mean=1.9266 max=1.9731
+      Z4: mean=2.0158 max=2.0852
+=== Probe representation: nperturb5 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['high_perturb', 'g_zero']
+    high_perturb: ||g||=2.5198
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    high_perturb: mean z_shift=2.6585  mean |γ|=0.4049
+    g_zero: mean z_shift=0.4023  mean |γ|=0.0641
+    Cross-g z_t distance (high_perturb vs g_zero):
+      Z0: mean=2.3355 max=2.3663
+      Z1: mean=2.4128 max=2.5477
+      Z2: mean=2.5047 max=2.5929
+      Z3: mean=1.9657 max=2.1273
+      Z4: mean=2.2117 max=2.3417
+=== Probe representation: nperturb6 ===
+  Loaded: 45000 rows, 12 g dims
+  G conditions: ['high_perturb', 'g_zero']
+    high_perturb: ||g||=2.4630
+    g_zero: ||g||=0.0000
+  Collected 25 probes across 5 zones
+  [csv] probe_representation.csv
+  [fig] probe_z_shift.png
+  [fig] probe_gating_detail.png
+
+  Probe analysis summary:
+    high_perturb: mean z_shift=2.6331  mean |γ|=0.4022
+    g_zero: mean z_shift=0.4209  mean |γ|=0.0664
+    Cross-g z_t distance (high_perturb vs g_zero):
+      Z0: mean=2.2969 max=2.3254
+      Z1: mean=2.3605 max=2.4714
+      Z2: mean=2.4530 max=2.5288
+      Z3: mean=1.9840 max=2.0922
+      Z4: mean=2.1577 max=2.2642
