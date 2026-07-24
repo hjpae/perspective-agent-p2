@@ -1,0 +1,32 @@
+[discover] mixed: 30 runs
+[discover] baseline: 30 runs
+[discover] persistent: 30 runs
+
+=== Hierarchical block means of alpha (median-of-medians) ===
+  baseline    aB0=0.285  aB2=0.280  dAlpha=0.003  (n=30)
+  mixed       aB0=0.279  aB2=0.229  dAlpha=0.044  (n=30)
+  persistent  aB0=0.293  aB2=0.261  dAlpha=0.037  (n=30)
+
+=== RESIDUE: dAlpha(mixed) - dAlpha(baseline) ===
+  bootstrapping (10000)... permuting (10000)... done
+  R = 0.0418   95% CI [-0.0370, 0.1614] (includes zero)   perm p = 0.0831  (on 5 shared p1 clusters)
+
+=== RESIDUE: dAlpha(mixed) - dAlpha(persistent) ===
+  bootstrapping (10000)... permuting (10000)... done
+  R = 0.0074   95% CI [-0.1364, 0.1462] (includes zero)   perm p = 0.8259  (on 5 shared p1 clusters)
+
+=== Gamma reorganization (B2 - B0) across runs ===
+ * dim  9: median dGamma=-0.1733  consistency=0.97
+ * dim  2: median dGamma=-0.1961  consistency=0.87
+ * dim  6: median dGamma=-0.1412  consistency=0.87
+ * dim 14: median dGamma=+0.3973  consistency=0.83
+ * dim  4: median dGamma=+0.1345  consistency=0.83
+   dim 12: median dGamma=+0.1847  consistency=0.77
+  dimensions passing BOTH consistency >= 0.80 and |median| >= 0.020: 5/16
+  -> report this count in the Fig. 4(c) robustness sentence.
+
+=== Behavioral stability (mixed runs, Block 0 vs Block 2) ===
+  zone-occupancy total-variation distance: median = 0.066 (0 = identical, 1 = disjoint)
+  mean column shift: median = +0.10 cells (IQR -0.07 .. +0.80)
+
+[done] CSVs in outputs\phase2_all_20260403_011254\revision_stats
